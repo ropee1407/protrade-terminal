@@ -22,6 +22,9 @@
             .tab { @apply py-3 text-sm font-medium text-slate-400 border-b-2 border-transparent hover:text-slate-200 flex items-center gap-2 whitespace-nowrap transition-colors }
             .tab[aria-selected=true] { @apply text-blue-400 border-blue-500 }
             .inp { @apply w-full bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-blue-500 }
+            
+            /* Scorecard Progress Bar animations */
+            .progress-fill { transition: width 1s cubic-bezier(0.4, 0, 0.2, 1); }
         }
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
@@ -399,7 +402,7 @@
         }
     </script>
 
-    <!-- Module 2: UI Controller & Rendering -->
+    <!-- Module 2: UI Controller & Scorecard Engine (M6) -->
     <script>
         const RE = /^[A-Z0-9.\-:^=]{1,15}$/;
         let wl = ['NVDA', 'AAPL', 'SPY', 'QQQ'];
@@ -649,13 +652,97 @@
             $('#daily-review-output').innerHTML = `<div class="space-y-6"><div>${rev.analyst_md ? parseMdSafe(rev.analyst_md) : '<p class="text-slate-500 text-sm">รอรายงาน Analyst</p>'}</div><div class="bg-slate-800/30 p-4 rounded-lg border border-slate-700/50">${rev.critic_md ? parseMdSafe(rev.critic_md) : '<p class="text-slate-500 text-sm">รอรายงาน Critic</p>'}</div></div>`;
         }
 
+        // M6: Scorecard Engine Integration
         function renderScore() {
             const rev = appData.analysis && appData.analysis.market_review ? appData.analysis.market_review : {};
             $('#risk-output').innerHTML = rev.risk_md ? parseMdSafe(rev.risk_md) : '<p class="text-slate-500 text-center text-sm py-4">รอรายงาน Portfolio Risk Manager</p>';
-            const count = Array.isArray(appData.history) ? appData.history.length : 0;
-            $('#score-output').innerHTML = count > 0
-                ? `<div class="text-center py-6"><p class="text-xs text-emerald-400 font-bold uppercase mb-1">โหลดประวัติคำทำนายสำเร็จ</p><p class="text-2xl font-mono font-bold text-white">${count} รายการ</p><p class="text-xs text-slate-500 mt-2">พร้อมสำหรับติดตั้ง Scorecard Engine (M6) ในรอบถัดไป</p></div>`
-                : '<p class="text-slate-500 text-center py-10">รอข้อมูลประเมินผลจาก data/history/</p>';
+            
+            const hist = Array.isArray(appData.history) ? appData.history : [];
+            const count = hist.length;
+            
+            if (count === 0) {
+                $('#score-output').innerHTML = '<p class="text-slate-500 text-center py-10">รอข้อมูลประเมินผลจาก data/history/</p>';
+                return;
+            }
+
+            // Calculate Scorecard Metrics
+            let totalDecided = 0;
+            let hits = 0;
+            let misses = 0;
+            
+            let bullHits = 0, bullTotal = 0;
+            let bearHits = 0, bearTotal = 0;
+            
+            hist.forEach(rec => {
+                if (rec.outcome === 'hit' || rec.outcome === 'miss') {
+                    totalDecided++;
+                    if (rec.outcome === 'hit') hits++;
+                    if (rec.outcome === 'miss') misses++;
+                    
+                    if (rec.bias === 'bull') {
+                        bullTotal++;
+                        if (rec.outcome === 'hit') bullHits++;
+                    } else if (rec.bias === 'bear') {
+                        bearTotal++;
+                        if (rec.outcome === 'hit') bearHits++;
+                    }
+                }
+            });
+
+            const winRate = totalDecided > 0 ? ((hits / totalDecided) * 100).toFixed(1) : 0;
+            const bullRate = bullTotal > 0 ? ((bullHits / bullTotal) * 100).toFixed(1) : 0;
+            const bearRate = bearTotal > 0 ? ((bearHits / bearTotal) * 100).toFixed(1) : 0;
+
+            const pending = count - totalDecided;
+
+            let wrColor = 'text-amber-400';
+            let barColor = 'bg-amber-500';
+            if (winRate >= 60) { wrColor = 'text-emerald-400'; barColor = 'bg-emerald-500'; }
+            else if (winRate < 40 && totalDecided > 5) { wrColor = 'text-red-400'; barColor = 'bg-red-500'; }
+
+            $('#score-output').innerHTML = `
+                <div class="flex flex-col h-full">
+                    <h3 class="text-lg font-bold text-white flex items-center gap-2 mb-4">
+                        <i class="ph-fill ph-target text-emerald-500 text-xl"></i> AI Scorecard
+                    </h3>
+                    
+                    <div class="flex items-end gap-3 mb-5">
+                        <div class="text-4xl font-mono font-bold ${wrColor}">${winRate}%</div>
+                        <div class="text-xs text-slate-400 pb-1">Win Rate (All)</div>
+                    </div>
+                    
+                    <div class="w-full bg-slate-950 rounded-full h-2.5 mb-6 shadow-inner border border-slate-800">
+                        <div class="${barColor} h-2.5 rounded-full progress-fill" style="width: ${winRate}%"></div>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4 text-sm font-mono mb-6">
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-col justify-center">
+                            <span class="text-[10px] text-slate-500 mb-1 uppercase">Bull Calls</span>
+                            <span class="text-emerald-400 font-bold text-lg">${bullRate}% <span class="text-xs text-slate-600 font-normal">(${bullHits}/${bullTotal})</span></span>
+                        </div>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-col justify-center">
+                            <span class="text-[10px] text-slate-500 mb-1 uppercase">Bear Calls</span>
+                            <span class="text-red-400 font-bold text-lg">${bearRate}% <span class="text-xs text-slate-600 font-normal">(${bearHits}/${bearTotal})</span></span>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-auto pt-4 border-t border-slate-800 flex justify-between text-xs text-slate-400 font-mono">
+                        <span>Resolved: <strong class="text-white">${totalDecided}</strong></span>
+                        <span>Pending: <strong class="text-white">${pending}</strong></span>
+                        <span>Total: <strong class="text-white">${count}</strong></span>
+                    </div>
+                </div>
+            `;
+            
+            // Trigger animation
+            setTimeout(() => {
+                const fill = $('#score-output .progress-fill');
+                if (fill) {
+                    const w = fill.style.width;
+                    fill.style.width = '0%';
+                    setTimeout(() => fill.style.width = w, 50);
+                }
+            }, 100);
         }
 
         function toggleSettings() {
