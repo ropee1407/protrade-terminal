@@ -430,7 +430,6 @@ def main():
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
             tools=[{"google_search": {}}],
-            response_mime_type="application/json",
             temperature=0.2,
         ),
     )
