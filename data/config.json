@@ -1,0 +1,37 @@
+{
+  "config_version": 1,
+  "params": {
+    "analysis_trigger_atr": 1.0,
+    "neutral_band_mult": 0.3,
+    "invalidation_atr_mult": 0.5,
+    "sr_days": 10,
+    "min_n_eff": 30,
+    "max_rules": 10,
+    "max_new_rules_per_7d": 3,
+    "max_searches_total": 100,
+    "param_change_gap_pp": 5,
+    "full_refresh_days": 5,
+    "risk_per_trade_pct": 1.0,
+    "max_position_pct": 15,
+    "sector_concentration_pct": 40
+  },
+  "bounds": {
+    "analysis_trigger_atr": [
+      0.5,
+      2.0
+    ],
+    "neutral_band_mult": [
+      0.2,
+      0.5
+    ],
+    "invalidation_atr_mult": [
+      0.3,
+      1.0
+    ],
+    "sr_days": [
+      5,
+      20
+    ]
+  },
+  "params_log": []
+}
