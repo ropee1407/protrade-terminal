@@ -159,7 +159,7 @@ def record_failure(lessons, phase, reason):
 def main():
     force_run = os.getenv("FORCE_RUN", "false").lower() == "true"
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    model_name = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
 
     watchlist_cfg = load_json(f"{DATA_DIR}/watchlist.json", {
         "default": ["SPY", "QQQ", "NVDA", "AAPL"],
@@ -356,24 +356,32 @@ def main():
     lessons["rules"] = active_rules
 
     # Phase 2, 3.4, 4, 5: เรียก Gemini API + Google Search Grounding
-    client = genai.Client(api_key=api_key)
+    # Fix: API quota exceeded workaround (don't fail the whole run if 429 occurs, fall back to previous data)
+    final_tickers = {}
+    new_history_entries = []
+    has_missing = False
+    ai_out = {}
+    meta_status = "ok"
 
-    prompt_payload = {
-        "asof": expected_asof,
-        "watchlist": tickers_default,
-        "sectors": watchlist_cfg.get("sectors", {}),
-        "params": params,
-        "active_rules": active_rules,
-        "decided_today_count": {
-            "hit": sum(1 for x in decided_today if x["outcome"] == "hit"),
-            "miss": sum(1 for x in decided_today if x["outcome"] == "miss"),
-            "n_a": sum(1 for x in decided_today if x["outcome"] == "n/a")
-        },
-        "yesterday_summary": yesterday_summary,
-        "market_metrics": metrics_by_ticker
-    }
+    try:
+        client = genai.Client(api_key=api_key)
 
-    system_instruction = f"""
+        prompt_payload = {
+            "asof": expected_asof,
+            "watchlist": tickers_default,
+            "sectors": watchlist_cfg.get("sectors", {}),
+            "params": params,
+            "active_rules": active_rules,
+            "decided_today_count": {
+                "hit": sum(1 for x in decided_today if x["outcome"] == "hit"),
+                "miss": sum(1 for x in decided_today if x["outcome"] == "miss"),
+                "n_a": sum(1 for x in decided_today if x["outcome"] == "n/a")
+            },
+            "yesterday_summary": yesterday_summary,
+            "market_metrics": metrics_by_ticker
+        }
+
+        system_instruction = f"""
 คุณคือ ProTrade 6-in-1 Quant Analyst, Macro Sentinel, Critic และ Portfolio Risk Manager (PROMPT_VERSION={PROMPT_VERSION})
 หน้าที่ของคุณคือวิเคราะห์ข้อมูลตลาดจริง ณ วันที่ {expected_asof} และตอบกลับเป็น JSON ที่ถูกต้องตามสเปกเท่านั้น ห้ามมีข้อความนอก JSON
 
@@ -423,27 +431,26 @@ def main():
   }}
 }}
 """
-
-    response = client.models.generate_content(
-        model=model_name,
-        contents=json.dumps(prompt_payload, ensure_ascii=False),
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            tools=[{"google_search": {}}],
-            temperature=0.2,
-        ),
-    )
-
-    raw_text = response.text.strip()
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    ai_out = json.loads(raw_text)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=json.dumps(prompt_payload, ensure_ascii=False),
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.2,
+            ),
+        )
+        
+        raw_text = response.text.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        ai_out = json.loads(raw_text)
+    
+    except Exception as e:
+        print(f"[Warning] AI Analysis failed or rate limited: {e}")
+        meta_status = "failed"
+        ai_out = {"market_review": {}, "tickers": {}}
 
     # Phase 6: Schema & Rule Gate Validation
-    final_tickers = {}
-    new_history_entries = []
-    has_missing = False
-
     for sym in tickers_default:
         m = metrics_by_ticker.get(sym, {})
         if m.get("status") != "ok":
@@ -454,7 +461,17 @@ def main():
         t_ai = ai_out.get("tickers", {}).get(sym)
         if not t_ai or t_ai.get("status") == "ไม่มีข้อมูล":
             has_missing = True
-            final_tickers[sym] = {"status": "ไม่มีข้อมูล", "reason": "AI ไม่สามารถสรุปข้อมูลได้"}
+            
+            # Fallback to previous data if API rate limited
+            prev_e = prev_analysis.get("tickers", {}).get(sym)
+            if prev_e and prev_e.get("status") != "ไม่มีข้อมูล" and meta_status == "failed":
+                # Copy prev data but update close price
+                fallback_entry = prev_e.copy()
+                fallback_entry["close"] = m["close"]
+                fallback_entry["source"] = f"Yahoo Finance ({expected_asof} close) [AI Fallback]"
+                final_tickers[sym] = fallback_entry
+            else:
+                final_tickers[sym] = {"status": "ไม่มีข้อมูล", "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"}
             continue
 
         bias = t_ai.get("bias", "neutral")
@@ -545,7 +562,9 @@ def main():
     save_json(f"{DATA_DIR}/lessons.json", lessons)
     save_json(f"{DATA_DIR}/config.json", config)
 
-    meta_status = "partial" if has_missing else "ok"
+    if meta_status != "failed" and has_missing:
+        meta_status = "partial"
+        
     analysis_doc = {
         "meta": {
             "asof": expected_asof,
@@ -556,12 +575,12 @@ def main():
             "model": model_name,
             "status": meta_status
         },
-        "market_review": ai_out.get("market_review", {
+        "market_review": ai_out.get("market_review", prev_analysis.get("market_review", {
             "macro_md": "ไม่มีข้อมูล",
             "analyst_md": "ไม่มีข้อมูล",
             "critic_md": "ไม่มีข้อมูล",
             "risk_md": "ไม่มีข้อมูล"
-        }),
+        })),
         "tickers": final_tickers
     }
     save_json(f"{DATA_DIR}/analysis.json", analysis_doc)
@@ -569,9 +588,9 @@ def main():
     heartbeat.update({
         "last_checked": now_bkk_iso,
         "expected_asof": expected_asof,
-        "last_ok_asof": expected_asof,
+        "last_ok_asof": expected_asof if meta_status != "failed" else heartbeat.get("last_ok_asof"),
         "status": meta_status,
-        "note": f"Completed {valid_count}/{len(tickers_default)} tickers via GitHub Actions ({model_name})"
+        "note": f"Completed {valid_count}/{len(tickers_default)} tickers via GitHub Actions ({model_name})" if meta_status != "failed" else "API Rate Limited, using fallback data"
     })
     save_json(f"{DATA_DIR}/heartbeat.json", heartbeat)
     print(f"[Success] ProTrade run completed for {expected_asof} (status={meta_status}).")
