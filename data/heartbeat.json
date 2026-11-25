@@ -1,7 +1,7 @@
 {
-  "last_checked": "2026-11-25T10:08:06+07:00",
+  "last_checked": "2026-11-25T10:08:57+07:00",
   "expected_asof": "2026-11-24",
   "last_ok_asof": "2026-11-24",
-  "status": "skipped",
-  "note": "ไม่มีวันทำการใหม่ (Skipped)"
+  "status": "failed",
+  "note": "API Rate Limited, using fallback data"
 }
