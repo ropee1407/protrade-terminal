@@ -1,7 +1,0 @@
-{
-  "last_checked": "2026-11-25T13:45:00+07:00",
-  "expected_asof": "2026-11-24",
-  "last_ok_asof": "2026-11-23",
-  "status": "pending",
-  "note": "v4.2.1 Macro 1 + Micro 4 (15s pacing + auto-fallback) ready"
-}
