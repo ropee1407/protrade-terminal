@@ -24,17 +24,11 @@ ET = ZoneInfo("America/New_York")
 BKK = ZoneInfo("Asia/Bangkok")
 DATA_DIR = "data"
 PROMPT_VERSION = "v4.2"
-SYSTEM_VERSION = "v4.2.1-Macro1-Micro4"
+SYSTEM_VERSION = "v4.2.2-Macro1-Micro4"
 
 MAX_MACRO_CALLS = 1
 MAX_MICRO_CALLS = 4
 SLEEP_SECONDS = 15  # <= 4 RPM (safe under 5 RPM Free Tier limit)
-FALLBACK_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3-flash",
-    "gemini-4-hydrogen",
-    "gemini-3.5-flash-lite",
-]
 
 
 def load_json(path, default=None):
@@ -212,8 +206,22 @@ def chunk_list(items, n_chunks):
 def main():
     force_run = os.getenv("FORCE_RUN", "false").lower() == "true"
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    
+    # 1. รับค่าโมเดลหลัก
     primary_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
-    models_chain = list(dict.fromkeys([primary_model] + FALLBACK_MODELS))
+    
+    # 2. รับค่าโมเดลสำรองแบบไดนามิกจาก Workflow
+    fallback_env = os.getenv("GEMINI_FALLBACK_MODELS", "").strip()
+    if fallback_env:
+        fallback_models = [m.strip() for m in fallback_env.split(",") if m.strip()]
+    else:
+        fallback_models = [
+            "gemini-3-flash",
+            "gemini-4-hydrogen",
+            "gemini-3.5-flash-lite",
+        ]
+        
+    models_chain = list(dict.fromkeys([primary_model] + fallback_models))
 
     watchlist_cfg = load_json(f"{DATA_DIR}/watchlist.json", {
         "default": ["SPY", "QQQ", "DIA", "AAPL", "MSFT", "NVDA", "SKHY", "OKLO", "SMR", "LLY", "SCHD", "VGT", "BSX", "WDC", "DY", "CCJ", "GRAB"],
