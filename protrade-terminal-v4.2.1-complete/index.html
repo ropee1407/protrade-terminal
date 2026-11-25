@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="same-origin">
+    <title>ProTrade | 6-Agent Terminal</title>
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
+    <script src="https://s3.tradingview.com/tv.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = { darkMode: 'class', theme: { extend: { fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] }, colors: { slate: { 850: '#151e2e', 950: '#020617' }, term: '#0a0f1c' } } } }
+    </script>
+    <style type="text/tailwindcss">
+        @layer components {
+            .card { @apply bg-slate-900 border border-slate-800 rounded-lg }
+            .btn { @apply bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-2 rounded font-bold text-sm flex items-center gap-2 transition-all }
+            .btn2 { @apply bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 px-3 py-1.5 rounded text-xs transition-colors }
+            .tab { @apply py-3 text-sm font-medium text-slate-400 border-b-2 border-transparent hover:text-slate-200 flex items-center gap-2 whitespace-nowrap transition-colors }
+            .tab[aria-selected=true] { @apply text-blue-400 border-blue-500 }
+            .inp { @apply w-full bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-blue-500 }
+            .progress-fill { transition: width 1s cubic-bezier(0.4, 0, 0.2, 1); }
+        }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #0f172a; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        html { scroll-behavior: smooth; }
+        #settings-backdrop { background-color: rgba(0, 0, 0, 0.5); backdrop-filter: blur(2px); }
+    </style>
+</head>
+<body class="bg-term text-slate-200 font-sans h-dvh w-full overflow-hidden flex flex-col md:flex-row antialiased selection:bg-blue-500/30 relative">
+
+    <aside class="w-full md:w-72 bg-slate-900 border-b md:border-b-0 md:border-r border-slate-800 flex flex-col shrink-0 z-30 shadow-2xl relative max-h-[38dvh] md:max-h-none">
+        <div class="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950 shrink-0 relative z-40">
+            <h2 class="text-xl font-bold flex items-center gap-2 text-white">
+                <span class="h-8 w-8 bg-blue-600 rounded flex items-center justify-center shadow-[0_0_15px_rgba(37,99,235,0.4)]"><i class="ph-bold ph-chart-line-up"></i></span>
+                Pro<span class="text-blue-500 -ml-1.5">Trade</span>
+            </h2>
+            <button id="gear" aria-label="ตั้งค่าระบบ" class="text-slate-400 hover:text-white transition-colors"><i class="ph ph-gear text-xl"></i></button>
+        </div>
+        
+        <div id="settings-backdrop" class="hidden fixed inset-0 z-30"></div>
+        <div id="set" class="hidden absolute top-full left-0 w-full z-40 p-4 bg-slate-850 border-b border-slate-800 space-y-4 shadow-xl">
+            <div class="flex justify-between items-center mb-2">
+                <h3 class="text-sm font-bold text-white"><i class="ph-fill ph-gear mr-1"></i> ตั้งค่าระบบ</h3>
+                <button id="close-settings" class="text-slate-400 hover:text-red-400 transition-colors p-1" aria-label="ปิด"><i class="ph-bold ph-x"></i></button>
+            </div>
+            <div>
+                <label class="text-xs font-bold text-slate-400 mb-1 block">Gemini API Key (สำหรับ Instant Scan)</label>
+                <input id="key" type="password" class="inp" placeholder="Paste key..." autocomplete="off">
+            </div>
+            <div class="flex gap-2 flex-wrap pt-1">
+                <button id="save" class="btn2 !bg-blue-600 !text-white font-bold"><i class="ph-bold ph-floppy-disk mr-1"></i> Save Key</button>
+                <button id="exp" class="btn2"><i class="ph-bold ph-download-simple mr-1"></i> Export Config</button>
+                <label class="btn2 cursor-pointer flex items-center gap-1"><i class="ph-bold ph-upload-simple mr-1"></i> Import Config<input id="imp" type="file" accept=".json" class="hidden"></label>
+            </div>
+        </div>
+
+        <form id="add" class="p-3 border-b border-slate-800 flex gap-2 bg-slate-900 shrink-0">
+            <div class="relative flex-1 group">
+                <i class="ph ph-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-500 transition-colors"></i>
+                <input id="nt" class="inp !py-2 !text-sm uppercase !pl-9" placeholder="Symbol (กด / )" autocomplete="off" required maxlength="15">
+            </div>
+            <button class="btn2 hover:bg-blue-600 hover:text-white" aria-label="เพิ่ม"><i class="ph-bold ph-plus text-lg"></i></button>
+        </form>
+
+        <div class="px-4 pt-3 pb-1 flex justify-between items-center shrink-0">
+            <span class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Active Watchlist</span>
+            <i class="ph ph-list text-slate-500"></i>
+        </div>
+
+        <ul id="wl" class="flex md:flex-col overflow-x-auto md:overflow-y-auto p-2 gap-1 shrink-0 md:flex-1 custom-scrollbar min-h-0 relative z-10"></ul>
+        
+        <div class="p-3 border-t border-slate-800 bg-slate-950 flex justify-between items-center text-[10px] font-mono text-slate-500 shrink-0 relative z-10">
+            <span id="net"></span>
+            <span id="sys-version" class="text-blue-400 font-bold px-2 py-0.5 bg-blue-900/30 rounded border border-blue-500/20">Loading...</span>
+        </div>
+    </aside>
+
+    <main class="flex-1 flex flex-col h-full overflow-hidden bg-term relative min-w-0 min-h-0 z-10">
+        
+        <div id="alert-banners" class="flex flex-col z-20 shrink-0">
+            <div id="file-protocol-banner" class="hidden bg-red-600/20 border-b border-red-500/50 text-red-300 text-xs text-center py-2 px-4 font-medium shadow-inner">
+                <i class="ph-fill ph-warning text-sm align-middle mr-1"></i> โหลดไฟล์ JSON ภายนอกไม่สำเร็จ — กรุณาเปิดผ่าน Web Server / GitHub Pages แทนการดับเบิลคลิกเปิดไฟล์ตรงๆ
+            </div>
+            <div id="stale-banner" class="hidden bg-amber-500/20 border-b border-amber-500/50 text-amber-400 text-xs text-center py-2 px-4 font-medium shadow-inner">
+                <i class="ph-fill ph-warning-circle text-sm align-middle mr-1"></i> <span id="stale-msg">ข้อมูลไม่อัปเดต กรุณารอระบบรันรอบถัดไป</span>
+            </div>
+            <div id="heartbeat-banner" class="hidden bg-orange-500/20 border-b border-orange-500/50 text-orange-300 text-xs text-center py-2 px-4 font-medium shadow-inner">
+                <i class="ph-fill ph-heartbeat text-sm align-middle mr-1"></i> <span id="heartbeat-msg">ระบบอัตโนมัติอาจหยุดทำงาน</span>
+            </div>
+            <div id="status-banner" class="hidden bg-purple-500/20 border-b border-purple-500/50 text-purple-300 text-xs text-center py-2 px-4 font-medium shadow-inner">
+                <i class="ph-fill ph-info text-sm align-middle mr-1"></i> <span id="status-msg">สถานะข้อมูลไม่สมบูรณ์</span>
+            </div>
+        </div>
+
+        <header class="px-4 md:px-6 py-4 bg-slate-900 border-b border-slate-800 flex flex-col sm:flex-row justify-between sm:items-end gap-3 shrink-0 shadow-sm relative z-10">
+            <div class="flex items-center gap-3">
+                <div class="h-12 w-12 rounded bg-slate-800 border border-slate-700 hidden sm:flex items-center justify-center shadow-inner">
+                    <i class="ph-duotone ph-buildings text-blue-400 text-2xl"></i>
+                </div>
+                <div class="flex flex-col">
+                    <div class="flex items-baseline gap-3">
+                        <h1 id="h1" class="text-3xl font-bold font-mono tracking-tight text-white">---</h1>
+                        <span id="fresh" class="text-xs font-semibold px-2 py-0.5 rounded border text-slate-400 border-slate-700">Loading...</span>
+                    </div>
+                    <p class="text-[10px] sm:text-xs text-slate-400 font-medium mt-1">Institutional-Grade Autonomous Terminal</p>
+                </div>
+            </div>
+            <div class="flex gap-4 text-sm font-mono items-center">
+                <div class="flex flex-col sm:items-end">
+                    <span class="text-slate-500 text-[10px] uppercase">Market Status (US)</span>
+                    <span id="mkt" class="font-bold text-slate-300">Checking...</span>
+                </div>
+                <div class="w-px h-8 bg-slate-800 hidden sm:block"></div>
+                <div class="flex flex-col sm:items-end">
+                    <span class="text-slate-500 text-[10px] uppercase">Data Source</span>
+                    <span class="text-blue-400 flex items-center gap-1"><i class="ph-fill ph-lightning"></i> TradingView & Quant Agent</span>
+                </div>
+            </div>
+        </header>
+
+        <nav id="tabs" role="tablist" class="bg-slate-900 border-b border-slate-800 px-4 md:px-6 flex gap-6 overflow-x-auto hide-scrollbar shrink-0 relative z-10">
+            <button role="tab" class="tab" data-t="technical"><i class="ph-bold ph-chart-polar"></i> Technical</button>
+            <button role="tab" class="tab" data-t="fundamental"><i class="ph-bold ph-wallet"></i> Fundamentals</button>
+            <button role="tab" class="tab" data-t="insight"><i class="ph-bold ph-target"></i> Deep Insight <span class="bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 text-[9px] px-1.5 py-0.5 rounded ml-1">AI</span></button>
+            <button role="tab" class="tab" data-t="review"><i class="ph-bold ph-globe-hemisphere-west"></i> Macro & Review</button>
+            <button role="tab" class="tab" data-t="score"><i class="ph-bold ph-shield-check"></i> Portfolio Risk & Score</button>
+        </nav>
+
+        <div class="flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6 min-h-0 relative z-0">
+            <section id="p-technical" role="tabpanel" class="pn hidden flex-col gap-4 animate-fade-in"><div class="card h-[55dvh] min-h-[400px] p-0.5 shadow-lg"><div id="tv-chart" class="h-full w-full flex items-center justify-center bg-slate-900"><div class="text-slate-500 text-sm flex flex-col items-center"><i class="ph-duotone ph-spinner-gap animate-spin text-2xl mb-2"></i>Loading Chart...</div></div></div><div class="card h-[450px] p-1 shadow-lg pb-8"><div id="tv-ta" class="h-full w-full flex items-center justify-center bg-slate-900"><div class="text-slate-500 text-sm flex flex-col items-center"><i class="ph-duotone ph-spinner-gap animate-spin text-2xl mb-2"></i>Loading Technicals...</div></div></div></section>
+            <section id="p-fundamental" role="tabpanel" class="pn hidden flex-col xl:grid xl:grid-cols-2 gap-6 animate-fade-in pb-8"><div class="card h-[600px] p-1 shadow-lg"><div id="tv-pf" class="h-full w-full flex items-center justify-center bg-slate-900"><div class="text-slate-500 text-sm flex flex-col items-center"><i class="ph-duotone ph-spinner-gap animate-spin text-2xl mb-2"></i>Loading Profile...</div></div></div><div class="card h-[600px] p-1 shadow-lg"><div id="tv-fn" class="h-full w-full flex items-center justify-center bg-slate-900"><div class="text-slate-500 text-sm flex flex-col items-center"><i class="ph-duotone ph-spinner-gap animate-spin text-2xl mb-2"></i>Loading Financials...</div></div></div></section>
+
+            <section id="p-insight" role="tabpanel" class="pn hidden flex-col gap-4 animate-fade-in pb-8">
+                <div class="card p-5 border-emerald-500/30 bg-slate-800/40">
+                    <h3 class="text-lg font-bold text-emerald-400 flex items-center gap-2 mb-1"><i class="ph-fill ph-target text-2xl"></i> <span id="it">---</span> Dual-Persona Insight</h3>
+                    <p class="text-xs text-slate-400">มุมมองจากการถกเถียงของ AI ฝั่งกระทิง (Bull) และฝั่งจับผิด (Skeptic)</p>
+                </div>
+                <div id="ins" class="min-h-[300px]"></div>
+            </section>
+
+            <section id="p-review" role="tabpanel" class="pn hidden flex-col gap-6 animate-fade-in pb-8">
+                <div class="grid grid-cols-1 gap-6">
+                    <div class="card p-6 shadow-lg border-t-2 border-blue-500" id="macro-output"></div>
+                    <div class="card p-6 shadow-lg border-t-2 border-purple-500" id="daily-review-output"></div>
+                </div>
+            </section>
+
+            <section id="p-score" role="tabpanel" class="pn hidden flex-col gap-6 animate-fade-in pb-8">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div class="lg:col-span-2 card p-6 shadow-lg border-t-2 border-red-500 bg-red-950/10" id="risk-output"></div>
+                    <div class="card p-6 shadow-lg border-t-2 border-emerald-500" id="score-output"></div>
+                </div>
+            </section>
+            
+            <footer class="text-center py-6 border-t border-slate-800/50 mt-10">
+                <p class="text-[10px] text-slate-500 uppercase tracking-widest">ข้อมูลและผลการวิเคราะห์ทั้งหมดสร้างขึ้นโดยระบบปัญญาประดิษฐ์เพื่อการศึกษาและจำลองพอร์ต</p>
+                <p class="text-[11px] font-bold text-slate-400 mt-1">ไม่ใช่คำแนะนำการลงทุน (Not Financial Advice)</p>
+            </footer>
+        </div>
+    </main>
+    
+    <div id="toast" role="status" class="hidden"></div>
+
+    <style>
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+    </style>
+
+    <script>
+        const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+        const esc = s => {
+            const div = document.createElement('div');
+            div.textContent = String(s ?? '');
+            return div.innerHTML;
+        };
+        const num = (v, dec = 2) => typeof v === 'number' && isFinite(v) ? v.toLocaleString('en-US', { maximumFractionDigits: dec }) : 'N/A';
+
+        let appData = {
+            analysis: null,
+            watchlist: null,
+            heartbeat: null,
+            lessons: null,
+            history: [],
+            prices: {}
+        };
+
+        function getRecentMonths(count = 3) {
+            const months = [];
+            const now = new Date();
+            for (let i = 0; i < count; i++) {
+                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const yyyy = d.getFullYear();
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                months.push(`${yyyy}-${mm}`);
+            }
+            return months;
+        }
+
+        async function fetchJsonSafe(url, required = false) {
+            try {
+                const res = await fetch(url, { cache: 'no-store' });
+                if (!res.ok) {
+                    if (res.status === 404 && !required) return null;
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                return await res.json();
+            } catch (e) {
+                if (required) throw e;
+                return null;
+            }
+        }
+
+        function getExpectedAsof(holidays = []) {
+            let checkDate = new Date();
+            for (let i = 0; i < 14; i++) {
+                const parts = Object.fromEntries(
+                    new Intl.DateTimeFormat('en-CA', {
+                        timeZone: 'America/New_York',
+                        weekday: 'short',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false
+                    }).formatToParts(checkDate).map(x => [x.type, x.value])
+                );
+                const dStr = `${parts.year}-${parts.month}-${parts.day}`;
+                const mins = (+parts.hour % 24) * 60 + +parts.minute;
+                const isWeekend = parts.weekday === 'Sat' || parts.weekday === 'Sun';
+                const isHoliday = holidays.includes(dStr);
+
+                if (!isWeekend && !isHoliday) {
+                    if (i === 0 && mins < 990) {
+                        checkDate.setDate(checkDate.getDate() - 1);
+                        continue;
+                    }
+                    return dStr;
+                }
+                checkDate.setDate(checkDate.getDate() - 1);
+            }
+            return null;
+        }
+
+        function countTradingDaysBetween(startStr, endStr, holidays = []) {
+            if (!startStr || !endStr || startStr >= endStr) return 0;
+            let count = 0;
+            let cur = new Date(startStr + 'T12:00:00Z');
+            const end = new Date(endStr + 'T12:00:00Z');
+            while (cur < end && count < 60) {
+                cur.setUTCDate(cur.getUTCDate() + 1);
+                const dStr = cur.toISOString().slice(0, 10);
+                const day = cur.getUTCDay();
+                if (day !== 0 && day !== 6 && !holidays.includes(dStr)) {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        function parseMdSafe(md) {
+            if (!md) return '';
+            const safe = esc(md);
+            const lines = safe.split('\n');
+            const out = [];
+            let inTable = false;
+
+            for (let i = 0; i < lines.length; i++) {
+                let line = lines[i].trim();
+                if (!line) {
+                    if (inTable) { out.push('</tbody></table></div>'); inTable = false; }
+                    continue;
+                }
+
+                if (line.startsWith('|') && line.endsWith('|')) {
+                    const cells = line.slice(1, -1).split('|').map(c => c.trim());
+                    if (cells.every(c => /^[-:]+$/.test(c))) continue;
+                    if (!inTable) {
+                        inTable = true;
+                        out.push('<div class="overflow-x-auto my-3"><table class="w-full text-xs text-left border-collapse border border-slate-800"><thead><tr class="bg-slate-800/80 text-slate-200">');
+                        cells.forEach(c => out.push(`<th class="p-2 border border-slate-700">${formatInlineMd(c)}</th>`));
+                        out.push('</tr></thead><tbody>');
+                    } else {
+                        out.push('<tr class="border-b border-slate-800/60 hover:bg-slate-800/30">');
+                        cells.forEach(c => out.push(`<td class="p-2 border border-slate-800 text-slate-300">${formatInlineMd(c)}</td>`));
+                        out.push('</tr>');
+                    }
+                    continue;
+                } else if (inTable) {
+                    out.push('</tbody></table></div>');
+                    inTable = false;
+                }
+
+                if (line.startsWith('### ')) {
+                    out.push(`<h3 class="text-base font-bold text-white mt-4 mb-2">${formatInlineMd(line.slice(4))}</h3>`);
+                } else if (line.startsWith('## ')) {
+                    out.push(`<h2 class="text-lg font-bold text-blue-400 mt-5 mb-3">${formatInlineMd(line.slice(3))}</h2>`);
+                } else if (line.startsWith('# ')) {
+                    out.push(`<h1 class="text-xl font-bold text-white mt-5 mb-3">${formatInlineMd(line.slice(2))}</h1>`);
+                } else if (line.startsWith('- ') || line.startsWith('* ')) {
+                    out.push(`<li class="ml-4 list-disc marker:text-blue-500 py-0.5 text-sm text-slate-300">${formatInlineMd(line.slice(2))}</li>`);
+                } else {
+                    out.push(`<p class="mb-2 text-sm text-slate-300 leading-relaxed">${formatInlineMd(line)}</p>`);
+                }
+            }
+            if (inTable) out.push('</tbody></table></div>');
+            return out.join('\n');
+        }
+
+        function formatInlineMd(text) {
+            return text
+                .replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>')
+                .replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 bg-slate-800 text-blue-300 rounded text-xs font-mono">$1</code>');
+        }
+
+        function evaluateBanners() {
+            const holidays = (appData.watchlist && appData.watchlist.holidays) || [];
+            const meta = appData.analysis && appData.analysis.meta;
+            const hb = appData.heartbeat;
+
+            const expectedAsof = getExpectedAsof(holidays);
+            if (meta && meta.asof && expectedAsof && meta.asof < expectedAsof) {
+                const lagDays = countTradingDaysBetween(meta.asof, expectedAsof, holidays);
+                $('#stale-banner').classList.remove('hidden');
+                $('#stale-msg').textContent = `ข้อมูลเก่า ${lagDays} วันทำการ (ล่าสุด ณ ${meta.asof} / คาดหวัง ${expectedAsof})`;
+            } else {
+                $('#stale-banner').classList.add('hidden');
+            }
+
+            if (hb && hb.last_checked) {
+                const diffHrs = (Date.now() - new Date(hb.last_checked).getTime()) / 36e5;
+                if (diffHrs > 36) {
+                    $('#heartbeat-banner').classList.remove('hidden');
+                    $('#heartbeat-msg').textContent = `ระบบอัตโนมัติอาจหยุดทำงาน (ตรวจสอบล่าสุดเมื่อ ${Math.floor(diffHrs)} ชั่วโมงที่แล้ว)`;
+                } else {
+                    $('#heartbeat-banner').classList.add('hidden');
+                }
+            }
+
+            if (meta && (meta.status === 'partial' || meta.status === 'failed')) {
+                $('#status-banner').classList.remove('hidden');
+                $('#status-msg').textContent = meta.status === 'failed'
+                    ? 'การวิเคราะห์รอบล่าสุดล้มเหลว (failed) — กำลังแสดงข้อมูลชุดก่อนหน้า'
+                    : 'ข้อมูลบางส่วนไม่สมบูรณ์ (partial) — หุ้นบางตัวไม่มีข้อมูลในรอบนี้';
+            } else {
+                $('#status-banner').classList.add('hidden');
+            }
+        }
+
+        async function loadData() {
+            try {
+                const [analysis, watchlist, heartbeat, lessons] = await Promise.all([
+                    fetchJsonSafe('data/analysis.json', true),
+                    fetchJsonSafe('data/watchlist.json', false),
+                    fetchJsonSafe('data/heartbeat.json', false),
+                    fetchJsonSafe('data/lessons.json', false)
+                ]);
+
+                appData.analysis = analysis;
+                appData.watchlist = watchlist;
+                appData.heartbeat = heartbeat;
+                appData.lessons = lessons;
+
+                const months = getRecentMonths(3);
+                const histResults = await Promise.all(months.map(m => fetchJsonSafe(`data/history/history_${m}.json`, false)));
+                const priceResults = await Promise.all(months.map(m => fetchJsonSafe(`data/prices/prices_${m}.json`, false)));
+
+                appData.history = histResults.filter(Array.isArray).flat();
+                appData.prices = Object.assign({}, ...priceResults.filter(Boolean));
+
+                $('#file-protocol-banner').classList.add('hidden');
+            } catch (e) {
+                console.warn('External JSON fetch failed:', e);
+                $('#file-protocol-banner').classList.remove('hidden');
+            }
+
+            if (appData.watchlist && Array.isArray(appData.watchlist.default) && appData.watchlist.default.length > 0) {
+                let hasLocal = false;
+                try { hasLocal = !!localStorage.getItem('protrade_watchlist'); } catch (e) {}
+                if (!hasLocal) {
+                    wl = [...appData.watchlist.default];
+                    if (!wl.includes(cur)) cur = wl[0];
+                }
+            }
+
+            evaluateBanners();
+            renderWL();
+            head();
+            renderInsight();
+            if (tab === 'review') renderReview();
+            if (tab === 'score') renderScore();
+        }
+    </script>
+
+    <script>
+        const RE = /^[A-Z0-9.\-:^=]{1,15}$/;
+        let wl = ['NVDA', 'AAPL', 'SPY', 'QQQ'];
+        try {
+            const localWl = JSON.parse(localStorage.getItem('protrade_watchlist'));
+            if (localWl && localWl.length > 0) wl = localWl;
+        } catch (e) {}
+
+        let cur = 'NVDA';
+        try { cur = localStorage.getItem('pt_cur') || wl[0]; } catch (e) {}
+        if (!wl.includes(cur)) cur = wl[0];
+
+        let tab = 'technical';
+        try { tab = localStorage.getItem('pt_tab') || 'technical'; } catch (e) {}
+        if (!['technical', 'fundamental', 'insight', 'review', 'score'].includes(tab)) tab = 'technical';
+        const loaded = {};
+
+        let tt;
+        function toast(m, bad) {
+            const e = $('#toast'); e.textContent = m;
+            e.className = 'fixed bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded font-medium shadow-2xl z-50 text-white animate-fade-in ' + (bad ? 'bg-red-600' : 'bg-slate-700');
+            clearTimeout(tt); tt = setTimeout(() => e.className = 'hidden', 3500);
+        }
+
+        function mkt() {
+            const holidays = (appData.watchlist && appData.watchlist.holidays) || [];
+            const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date()).map(x => [x.type, x.value]));
+            const d = `${p.year}-${p.month}-${p.day}`, m = (+p.hour % 24) * 60 + +p.minute;
+            let s, c = 'text-red-400';
+            if (['Sat', 'Sun'].includes(p.weekday)) s = 'ปิด (สุดสัปดาห์)';
+            else if (holidays.includes(d)) s = 'ปิด (วันหยุด)';
+            else if (m >= 570 && m < 960) { s = '● OPEN'; c = 'text-emerald-400 animate-pulse'; }
+            else s = 'CLOSED';
+            const e = $('#mkt'); e.textContent = s; e.className = 'font-bold tracking-wider ' + c;
+        }
+
+        function net() {
+            const e = $('#net'); e.textContent = navigator.onLine ? '● Online' : '● Offline';
+            e.className = navigator.onLine ? 'text-emerald-500' : 'text-red-400';
+        }
+
+        function renderWL() {
+            const ul = $('#wl'); ul.replaceChildren();
+            const analysisData = appData.analysis && appData.analysis.tickers ? appData.analysis.tickers : {};
+
+            wl.forEach(t => {
+                const s = analysisData[t];
+                const isNoData = s && s.status === 'ไม่มีข้อมูล';
+                const on = t === cur;
+                const li = document.createElement('li');
+                li.className = 'shrink-0 flex items-center rounded border transition-all ' + (on ? 'bg-blue-600/10 border-blue-500/50 text-white' : 'border-transparent text-slate-400 hover:bg-slate-800');
+
+                const b = document.createElement('button');
+                b.className = 'flex-1 flex items-center gap-2 p-2.5 font-mono text-left outline-none';
+                let dotClass = 'bg-slate-700';
+                if (!isNoData && s && s.bias) dotClass = { bull: 'bg-emerald-500', bear: 'bg-red-500' }[s.bias] || 'bg-amber-400';
+
+                const dotSpan = document.createElement('span');
+                dotSpan.className = `h-2 w-2 rounded-full ${dotClass}`;
+
+                const tickerSpan = document.createElement('span');
+                if (on) tickerSpan.className = 'font-bold';
+                if (isNoData) tickerSpan.classList.add('text-slate-500');
+                tickerSpan.textContent = t;
+
+                b.appendChild(dotSpan);
+                b.appendChild(tickerSpan);
+
+                if (isNoData) {
+                    const ndSpan = document.createElement('span');
+                    ndSpan.className = 'text-[9px] text-slate-500 ml-auto';
+                    ndSpan.textContent = 'ไม่มีข้อมูล';
+                    b.appendChild(ndSpan);
+                } else if (s && s.confidence) {
+                    const confSpan = document.createElement('span');
+                    confSpan.className = 'text-[10px] text-slate-500 ml-auto';
+                    confSpan.textContent = `${s.confidence}%`;
+                    b.appendChild(confSpan);
+                }
+
+                b.onclick = () => pick(t);
+
+                const d = document.createElement('button');
+                d.className = 'p-2 text-slate-600 hover:text-red-400 opacity-0 md:opacity-100 group-hover:opacity-100';
+                d.innerHTML = '<i class="ph-fill ph-trash"></i>';
+                d.onclick = () => del(t);
+
+                li.classList.add('group'); li.append(b, d); ul.append(li);
+            });
+        }
+
+        function pick(t) {
+            cur = t;
+            try { localStorage.setItem('pt_cur', t); } catch (e) {}
+            renderWL(); head(); renderInsight(); loadTab();
+        }
+
+        function del(t) {
+            if (wl.length < 2) return toast('ต้องเหลืออย่างน้อย 1 ตัว', 1);
+            if (!confirm(`ลบ ${t} ออกจาก Watchlist?`)) return;
+            wl = wl.filter(x => x !== t);
+            try { localStorage.setItem('protrade_watchlist', JSON.stringify(wl)); } catch (e) {}
+            if (cur === t) pick(wl[0]); else renderWL();
+        }
+
+        $('#add').onsubmit = e => {
+            e.preventDefault(); const t = $('#nt').value.trim().toUpperCase();
+            if (!RE.test(t)) return toast('สัญลักษณ์ไม่ถูกต้อง ใช้ได้เฉพาะ A-Z 0-9 . - : ^ =', 1);
+            $('#nt').value = '';
+            if (wl.includes(t)) { toast(t + ' มีอยู่แล้ว'); return pick(t); }
+            wl.unshift(t);
+            try { localStorage.setItem('protrade_watchlist', JSON.stringify(wl)); } catch (e) {}
+            pick(t);
+        };
+
+        function head() {
+            $('#h1').textContent = cur; $('#it').textContent = cur;
+            const meta = appData.analysis ? appData.analysis.meta : null;
+            const f = $('#fresh');
+
+            if (meta && meta.version) $('#sys-version').textContent = `${meta.version} (${meta.model || 'unknown'})`;
+            else $('#sys-version').textContent = 'Offline / No Data';
+
+            if (!meta || !meta.asof) {
+                f.textContent = 'ไม่มีข้อมูล';
+                f.className = 'text-xs font-semibold px-2 py-0.5 rounded border ml-3 text-slate-400 border-slate-700 bg-slate-800/50';
+                return;
+            }
+
+            const a = Math.floor((Date.now() - new Date(meta.asof)) / 864e5);
+            f.textContent = 'ข้อมูล ณ ' + meta.asof;
+            let bs = 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10';
+            if (a > 3) bs = 'text-red-400 border-red-500/30 bg-red-500/10'; else if (a > 1) bs = 'text-amber-400 border-amber-500/30 bg-amber-500/10';
+
+            if (meta.status === 'partial') bs = 'text-amber-400 border-amber-500/30 bg-amber-500/10';
+            else if (meta.status === 'failed') bs = 'text-red-400 border-red-500/30 bg-red-500/10';
+
+            f.className = `text-xs font-semibold px-2 py-0.5 rounded border ml-3 ${bs}`;
+        }
+
+        function setTab(t) {
+            tab = t;
+            try { localStorage.setItem('pt_tab', t); } catch (e) {}
+            $$('#tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.t === t));
+            $$('.pn').forEach(p => { const on = p.id === 'p-' + t; p.classList.toggle('hidden', !on); p.classList.toggle('flex', on); });
+            loadTab();
+            if (t === 'review') renderReview();
+            if (t === 'score') renderScore();
+            window.dispatchEvent(new Event('resize'));
+        }
+        $('#tabs').onclick = e => { const b = e.target.closest('button'); if (b) setTab(b.dataset.t); };
+
+        function inj(id, name, cfg) {
+            const c = $('#' + id); c.replaceChildren();
+            const w = document.createElement('div'); w.className = 'tradingview-widget-container__widget h-full w-full'; c.append(w);
+            const s = document.createElement('script');
+            s.async = true;
+            s.src = 'https://s3.tradingview.com/external-embedding/' + name + '.js';
+            s.onerror = function () {
+                c.innerHTML = `<div class="h-full w-full flex flex-col items-center justify-center bg-slate-900 border border-dashed border-slate-700 rounded-lg p-6 text-center">
+                    <i class="ph-duotone ph-warning-circle text-4xl text-amber-500 mb-2"></i>
+                    <h4 class="text-white font-bold mb-1">ไม่สามารถโหลดเครื่องมือ TradingView ได้</h4>
+                    <p class="text-slate-400 text-sm">เบราว์เซอร์หรือส่วนขยาย (เช่น Adblocker) อาจบล็อกการเชื่อมต่อ<br>กรุณาตรวจสอบการตั้งค่าเบราว์เซอร์ของคุณ</p>
+                </div>`;
+            };
+            s.textContent = JSON.stringify(cfg);
+            c.append(s);
+        }
+
+        function loadTab() {
+            if (loaded[tab] === cur) return;
+            const o = { colorTheme: 'dark', isTransparent: true, width: '100%', height: '100%', symbol: cur };
+            if (tab === 'technical') {
+                const c = $('#tv-chart'); c.replaceChildren();
+                if (window.TradingView) {
+                    try {
+                        new TradingView.widget({ autosize: true, symbol: cur, interval: 'D', timezone: 'Etc/UTC', theme: 'dark', style: '1', locale: 'en', enable_publishing: false, backgroundColor: '#020617', gridColor: '#1e293b', container_id: 'tv-chart', toolbar_bg: '#0f172a' });
+                    } catch (e) {
+                        c.innerHTML = `<div class="h-full w-full flex flex-col items-center justify-center text-red-400">Error loading chart</div>`;
+                    }
+                } else {
+                    c.innerHTML = `<div class="h-full w-full flex flex-col items-center justify-center bg-slate-900 border border-dashed border-slate-700 rounded-lg p-6 text-center">
+                        <i class="ph-duotone ph-warning-circle text-4xl text-amber-500 mb-2"></i>
+                        <h4 class="text-white font-bold mb-1">TradingView Library is missing</h4>
+                        <p class="text-slate-400 text-sm">ไม่สามารถโหลด tv.js จาก CDN ได้ กรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต</p>
+                    </div>`;
+                }
+                inj('tv-ta', 'embed-widget-technical-analysis', { ...o, interval: '1D' });
+            } else if (tab === 'fundamental') {
+                inj('tv-pf', 'embed-widget-symbol-profile', o); inj('tv-fn', 'embed-widget-financials', { ...o, displayMode: 'regular' });
+            } else return;
+            loaded[tab] = cur;
+        }
+
+        const BI = { bull: ['ขาขึ้น (Bullish)', 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'], bear: ['ขาลง (Bearish)', 'text-red-400 bg-red-500/10 border-red-500/30'], neutral: ['ไซด์เวย์ (Sideway)', 'text-amber-400 bg-amber-500/10 border-amber-500/30'] };
+        const formatArg = (txt) => txt.replace(/\(Bull\)/gi, '<span class="bg-emerald-900/40 text-emerald-400 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold mr-1">Bull</span>')
+            .replace(/\(Skeptic\)/gi, '<span class="bg-red-900/40 text-red-400 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold mr-1">Skeptic</span>');
+        const list = (t, a) => a && a.length ? `<h4 class="text-xs font-bold text-slate-400 mt-4 mb-2">${t}</h4><ul class="list-none text-sm space-y-2 text-slate-300">${a.map(x => `<li class="flex items-start"><i class="ph-fill ph-caret-right text-slate-600 mt-1 mr-1.5 shrink-0"></i> <span>${formatArg(esc(x))}</span></li>`).join('')}</ul>` : '';
+
+        function renderInsight() {
+            const o = $('#ins');
+            const data = appData.analysis && appData.analysis.tickers ? appData.analysis.tickers[cur] : null;
+
+            if (!data) {
+                o.innerHTML = `<div class="card p-8 text-center flex flex-col items-center justify-center border-dashed border-slate-700 bg-slate-900/50 min-h-[300px]"><i class="ph-duotone ph-robot text-4xl text-slate-600 mb-2"></i><p class="text-slate-400">ยังไม่ได้วิเคราะห์ <span class="text-white">${esc(cur)}</span></p></div>`;
+                return;
+            }
+
+            if (data.status === 'ไม่มีข้อมูล') {
+                o.innerHTML = `<div class="card p-8 text-center flex flex-col items-center justify-center border-slate-700 bg-slate-800/40 text-slate-400 min-h-[300px]">
+                    <i class="ph-duotone ph-prohibit text-4xl text-slate-500 mb-2"></i>
+                    <h4 class="text-base font-bold text-slate-300 mb-1">${esc(cur)} — ไม่มีข้อมูล</h4>
+                    <p class="text-xs text-slate-500">${esc(data.reason || 'ไม่สามารถดึงข้อมูลราคาหรือยืนยันความถูกต้องได้ในรอบนี้')}</p>
+                </div>`;
+                return;
+            }
+
+            const [b, c] = BI[data.bias] || BI['neutral'];
+            const lvls = data.levels || {};
+
+            o.innerHTML = `
+                <div class="card p-5 lg:p-6 shadow-lg relative overflow-hidden">
+                    <div class="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl -mr-10 -mt-10"></div>
+                    <div class="flex flex-wrap items-center gap-3 mb-6 relative z-10">
+                        <span class="px-3 py-1.5 rounded-md border font-bold text-sm shadow-sm ${c}">${b}</span>
+                        <span class="font-mono text-sm px-2 py-1 bg-slate-800 rounded text-slate-300 border border-slate-700">มั่นใจ <span class="text-white font-bold">${data.confidence || 0}%</span> / กรอบ <span class="text-white">${esc(data.horizon || '-')}</span></span>
+                        ${data.analysis_mode ? `<span class="font-mono text-[10px] uppercase px-2 py-1 bg-slate-950 rounded text-slate-400 border border-slate-800">Mode: ${esc(data.analysis_mode)}</span>` : ''}
+                        <div class="sm:ml-auto flex flex-col items-end"><span class="text-sm font-mono font-bold text-white">ปิด ${num(data.close)}</span><span class="text-[10px] text-slate-500">Source: ${esc(data.source || '-')}</span></div>
+                    </div>
+                    <div class="grid grid-cols-3 gap-3 font-mono text-center mb-6 relative z-10">
+                        ${[['แนวรับ (Support)', lvls.support, 'text-emerald-400'], ['แนวต้าน (Resistance)', lvls.resistance, 'text-red-400'], ['จุดยอมแพ้ (Invalidation)', lvls.invalidation, 'text-amber-400']].map(([l, v, k]) => `<div class="bg-slate-950 border border-slate-800 rounded-lg p-3 shadow-inner flex flex-col justify-center"><div class="text-[10px] sm:text-xs text-slate-500 mb-1 leading-tight">${l}</div><div class="${k} font-bold text-base sm:text-lg">${num(v)}</div></div>`).join('')}
+                    </div>
+                    <div class="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-900/50 p-4 rounded-lg border border-slate-800/50">
+                        <div>${list('<i class="ph-fill ph-trend-up text-emerald-500 mr-1"></i> ปัจจัยสนับสนุน (Bull Case)', data.reasons)}</div>
+                        <div>${list('<i class="ph-fill ph-trend-down text-red-500 mr-1"></i> ข้อโต้แย้ง/ความเสี่ยง (Skeptic Case)', data.risks)}</div>
+                    </div>
+                    ${data.catalyst ? `<div class="mt-5 p-3 border-l-2 border-blue-500 bg-blue-900/10 text-sm relative z-10"><b class="text-blue-400">ตัวเร่ง (Catalyst):</b> <span class="text-slate-300">${esc(data.catalyst)}</span></div>` : ''}
+                    ${data.long_term ? `<div class="mt-5 pt-5 border-t border-slate-800 relative z-10"><h4 class="text-sm font-bold text-slate-300 mb-2 flex items-center gap-2"><i class="ph-duotone ph-binoculars text-purple-400"></i> มุมมองระยะยาว (Long Term)</h4><p class="text-sm text-slate-400 mb-2">${esc(data.long_term.view || '')}</p>${data.long_term.zone ? `<p class="text-sm font-mono"><span class="text-slate-500">โซนสะสม:</span> <span class="text-purple-400 font-bold">${esc(data.long_term.zone)}</span></p>` : ''}</div>` : ''}
+                    ${data.yesterday && data.yesterday.call ? `<div class="mt-4 pt-4 border-t border-slate-800/60 flex items-center justify-between text-xs text-slate-400 font-mono"><span>ผลรอบก่อน (${esc(data.yesterday.call)}): <strong class="uppercase text-white">${esc(data.yesterday.result || 'n/a')}</strong></span><span>${esc(data.yesterday.note || '')}</span></div>` : ''}
+                </div>
+            `;
+        }
+
+        function renderReview() {
+            const rev = appData.analysis && appData.analysis.market_review ? appData.analysis.market_review : {};
+            $('#macro-output').innerHTML = rev.macro_md ? parseMdSafe(rev.macro_md) : '<p class="text-slate-500 text-center text-sm py-4">รอรายงาน Macro Sentinel จาก data/analysis.json</p>';
+            $('#daily-review-output').innerHTML = `<div class="space-y-6"><div>${rev.analyst_md ? parseMdSafe(rev.analyst_md) : '<p class="text-slate-500 text-sm">รอรายงาน Analyst</p>'}</div><div class="bg-slate-800/30 p-4 rounded-lg border border-slate-700/50">${rev.critic_md ? parseMdSafe(rev.critic_md) : '<p class="text-slate-500 text-sm">รอรายงาน Critic</p>'}</div></div>`;
+        }
+
+        function renderScore() {
+            const rev = appData.analysis && appData.analysis.market_review ? appData.analysis.market_review : {};
+            $('#risk-output').innerHTML = rev.risk_md ? parseMdSafe(rev.risk_md) : '<p class="text-slate-500 text-center text-sm py-4">รอรายงาน Portfolio Risk Manager</p>';
+            
+            const hist = Array.isArray(appData.history) ? appData.history : [];
+            const count = hist.length;
+            
+            if (count === 0) {
+                $('#score-output').innerHTML = '<p class="text-slate-500 text-center py-10">รอข้อมูลประเมินผลจาก data/history/</p>';
+                return;
+            }
+
+            let totalDecided = 0;
+            let hits = 0;
+            let misses = 0;
+            let bullHits = 0, bullTotal = 0;
+            let bearHits = 0, bearTotal = 0;
+            
+            hist.forEach(rec => {
+                if (rec.outcome === 'hit' || rec.outcome === 'miss') {
+                    totalDecided++;
+                    if (rec.outcome === 'hit') hits++;
+                    if (rec.outcome === 'miss') misses++;
+                    if (rec.bias === 'bull') {
+                        bullTotal++;
+                        if (rec.outcome === 'hit') bullHits++;
+                    } else if (rec.bias === 'bear') {
+                        bearTotal++;
+                        if (rec.outcome === 'hit') bearHits++;
+                    }
+                }
+            });
+
+            const winRate = totalDecided > 0 ? ((hits / totalDecided) * 100).toFixed(1) : 0;
+            const bullRate = bullTotal > 0 ? ((bullHits / bullTotal) * 100).toFixed(1) : 0;
+            const bearRate = bearTotal > 0 ? ((bearHits / bearTotal) * 100).toFixed(1) : 0;
+            const pending = count - totalDecided;
+
+            let wrColor = 'text-amber-400';
+            let barColor = 'bg-amber-500';
+            if (winRate >= 60) { wrColor = 'text-emerald-400'; barColor = 'bg-emerald-500'; }
+            else if (winRate < 40 && totalDecided > 5) { wrColor = 'text-red-400'; barColor = 'bg-red-500'; }
+
+            $('#score-output').innerHTML = `
+                <div class="flex flex-col h-full">
+                    <h3 class="text-lg font-bold text-white flex items-center gap-2 mb-4">
+                        <i class="ph-fill ph-target text-emerald-500 text-xl"></i> AI Scorecard
+                    </h3>
+                    <div class="flex items-end gap-3 mb-5">
+                        <div class="text-4xl font-mono font-bold ${wrColor}">${winRate}%</div>
+                        <div class="text-xs text-slate-400 pb-1">Win Rate (All)</div>
+                    </div>
+                    <div class="w-full bg-slate-950 rounded-full h-2.5 mb-6 shadow-inner border border-slate-800">
+                        <div class="${barColor} h-2.5 rounded-full progress-fill" style="width: ${winRate}%"></div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4 text-sm font-mono mb-6">
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-col justify-center">
+                            <span class="text-[10px] text-slate-500 mb-1 uppercase">Bull Calls</span>
+                            <span class="text-emerald-400 font-bold text-lg">${bullRate}% <span class="text-xs text-slate-600 font-normal">(${bullHits}/${bullTotal})</span></span>
+                        </div>
+                        <div class="bg-slate-950 p-3 rounded border border-slate-800 flex flex-col justify-center">
+                            <span class="text-[10px] text-slate-500 mb-1 uppercase">Bear Calls</span>
+                            <span class="text-red-400 font-bold text-lg">${bearRate}% <span class="text-xs text-slate-600 font-normal">(${bearHits}/${bearTotal})</span></span>
+                        </div>
+                    </div>
+                    <div class="mt-auto pt-4 border-t border-slate-800 flex justify-between text-xs text-slate-400 font-mono">
+                        <span>Resolved: <strong class="text-white">${totalDecided}</strong></span>
+                        <span>Pending: <strong class="text-white">${pending}</strong></span>
+                        <span>Total: <strong class="text-white">${count}</strong></span>
+                    </div>
+                </div>
+            `;
+            
+            setTimeout(() => {
+                const fill = $('#score-output .progress-fill');
+                if (fill) {
+                    const w = fill.style.width;
+                    fill.style.width = '0%';
+                    setTimeout(() => fill.style.width = w, 50);
+                }
+            }, 100);
+        }
+
+        function toggleSettings() {
+            $('#set').classList.toggle('hidden');
+            $('#settings-backdrop').classList.toggle('hidden');
+            try { $('#key').value = localStorage.getItem('protrade_api_key') || ''; } catch (e) {}
+        }
+        $('#gear').onclick = toggleSettings;
+        $('#close-settings').onclick = toggleSettings;
+        $('#settings-backdrop').onclick = toggleSettings;
+
+        $('#save').onclick = () => {
+            try { localStorage.setItem('protrade_api_key', $('#key').value.trim()); toast('บันทึก API Key แล้ว'); toggleSettings(); } catch (e) { toast('ไม่สามารถบันทึกได้', 1); }
+        };
+
+        $('#exp').onclick = () => {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([JSON.stringify({ watchlist: wl }, null, 2)], { type: 'application/json' }));
+            a.download = `protrade-config.json`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+            toggleSettings();
+        };
+
+        $('#imp').onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    if (data && Array.isArray(data.watchlist)) {
+                        const validWL = data.watchlist.filter(t => typeof t === 'string' && RE.test(t));
+                        if (validWL.length > 0) { wl = validWL; try { localStorage.setItem('protrade_watchlist', JSON.stringify(wl)); } catch (err) {} toast(`นำเข้า Watchlist ${wl.length} รายการสำเร็จ`); cur = wl[0]; pick(cur); } else toast('ไม่พบรายการที่ถูกต้อง', 1);
+                    } else toast('รูปแบบไฟล์ไม่ถูกต้อง', 1);
+                } catch (error) { toast('เกิดข้อผิดพลาดในการอ่านไฟล์', 1); }
+                $('#imp').value = ''; toggleSettings();
+            };
+            reader.readAsText(file);
+        };
+
+        addEventListener('keydown', e => {
+            if (e.target.matches('input,textarea')) return;
+            if (e.key === '/') { e.preventDefault(); $('#nt').focus(); }
+            else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const idx = wl.indexOf(cur) + (e.key === 'ArrowDown' ? 1 : -1); if (wl[idx]) pick(wl[idx]); }
+        });
+
+        mkt(); setInterval(mkt, 6e4); net(); addEventListener('online', net); addEventListener('offline', net);
+        setTab(tab);
+        loadData();
+    </script>
+</body>
+</html>
