@@ -1,7 +1,7 @@
 {
-  "last_checked": "2026-11-25T11:42:00+07:00",
+  "last_checked": "2026-11-25T13:14:24+07:00",
   "expected_asof": "2026-11-24",
-  "last_ok_asof": "2026-11-23",
-  "status": "pending",
-  "note": "Complete v4.2.0 package ready"
+  "last_ok_asof": "2026-11-24",
+  "status": "partial",
+  "note": "Macro 0/2 + Micro 17/18 (17 tickers)"
 }
