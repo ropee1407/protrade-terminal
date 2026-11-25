@@ -1,0 +1,114 @@
+{
+  "version": "v4.1.1",
+  "flags": {
+    "disclaimer_footer": true
+  },
+  "required_ids": [
+    "p-technical",
+    "p-fundamental",
+    "p-insight",
+    "p-review",
+    "p-score",
+    "wl",
+    "ins",
+    "macro-output",
+    "daily-review-output",
+    "risk-output",
+    "score-output"
+  ],
+  "required_functions": [
+    "loadData",
+    "getExpectedAsof",
+    "parseMdSafe",
+    "evaluateBanners",
+    "renderInsight",
+    "renderReview",
+    "renderScore"
+  ],
+  "entries": [
+    {
+      "date": "2026-11-25",
+      "version": "v4.1.1",
+      "changed": [
+        "run_protrade.py (guard zero successful API calls -> failed status)"
+      ]
+    },
+    {
+      "date": "2026-11-25",
+      "version": "v4.1.0",
+      "changed": [
+        "run_protrade.py (Macro 2 + Micro 18 Budget)"
+      ]
+    },
+    {
+      "date": "2026-11-25",
+      "version": "v3.2.0",
+      "changed": [
+        "renderScore",
+        "index.html"
+      ]
+    }
+  ],
+  "backlog": [
+    {
+      "id": "M2",
+      "title": "ชั้นข้อมูล",
+      "status": "done",
+      "fails": 0
+    },
+    {
+      "id": "M6",
+      "title": "Scorecard Engine (JS 100%)",
+      "status": "done",
+      "fails": 0
+    },
+    {
+      "id": "M4",
+      "title": "AI Scan (Macro 2 + Micro 18)",
+      "status": "done",
+      "fails": 0
+    },
+    {
+      "id": "M1",
+      "title": "ความปลอดภัยและบั๊ก",
+      "status": "todo",
+      "fails": 0
+    },
+    {
+      "id": "M3",
+      "title": "สถานะตลาด",
+      "status": "todo",
+      "fails": 0
+    },
+    {
+      "id": "M5",
+      "title": "ประสิทธิภาพ",
+      "status": "todo",
+      "fails": 0
+    },
+    {
+      "id": "M7",
+      "title": "คู่มือกราฟ",
+      "status": "todo",
+      "fails": 0
+    },
+    {
+      "id": "F1",
+      "title": "Heatmap ภาพรวม",
+      "status": "todo",
+      "fails": 0
+    },
+    {
+      "id": "F2",
+      "title": "ปุ่มลัด",
+      "status": "todo",
+      "fails": 0
+    },
+    {
+      "id": "F3",
+      "title": "Export/Import watchlist + โน้ตส่วนตัวต่อหุ้น",
+      "status": "todo",
+      "fails": 0
+    }
+  ]
+}
