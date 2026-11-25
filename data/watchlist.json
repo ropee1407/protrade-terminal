@@ -10,7 +10,13 @@
     "OKLO",
     "SMR",
     "LLY",
-    "SCHD"
+    "SCHD",
+    "VGT",
+    "BSX",
+    "SNDK",
+    "DY",
+    "CCJ",
+    "GRAB"
   ],
   "benchmarks": [
     "SPY",
@@ -27,7 +33,13 @@
     "OKLO": "Nuclear / Energy",
     "SMR": "Nuclear / Energy",
     "LLY": "Healthcare",
-    "SCHD": "Dividend ETF"
+    "SCHD": "Dividend ETF",
+    "VGT": "Technology ETF",
+    "BSX": "Healthcare",
+    "SNDK": "Semiconductors",
+    "DY": "Industrials",
+    "CCJ": "Nuclear / Energy",
+    "GRAB": "Consumer / Mobility"
   },
   "holidays_year": 2026,
   "holidays": [
