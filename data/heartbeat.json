@@ -1,7 +1,0 @@
-{
-  "last_checked": "2026-11-25T11:14:55+07:00",
-  "expected_asof": "2026-11-24",
-  "last_ok_asof": "2026-11-24",
-  "status": "failed",
-  "note": "API Rate Limited, using fallback data"
-}
