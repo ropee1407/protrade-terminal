@@ -1,5 +1,5 @@
 {
-  "version": "v3.2.0",
+  "version": "v4.1.0",
   "flags": {
     "disclaimer_footer": true
   },
@@ -28,23 +28,24 @@
   "entries": [
     {
       "date": "2026-11-25",
-      "version": "v3.2.0",
+      "version": "v4.1.0",
       "changed": [
-        "renderScore",
-        "index.html"
+        "run_protrade.py (Macro 2 + Micro 18 Budget)"
       ]
     },
     {
       "date": "2026-11-25",
-      "version": "v3.1.0",
+      "version": "v4.0.0",
       "changed": [
-        "loadData",
-        "getExpectedAsof",
-        "parseMdSafe",
-        "evaluateBanners",
-        "index.html",
-        "protrade_daily.yml",
-        "run_protrade.py"
+        "run_protrade.py (Micro-Batching)"
+      ]
+    },
+    {
+      "date": "2026-11-25",
+      "version": "v3.2.0",
+      "changed": [
+        "renderScore",
+        "index.html"
       ]
     }
   ],
@@ -62,6 +63,12 @@
       "fails": 0
     },
     {
+      "id": "M4",
+      "title": "AI Scan (Macro 2 + Micro 18)",
+      "status": "done",
+      "fails": 0
+    },
+    {
       "id": "M1",
       "title": "ความปลอดภัยและบั๊ก",
       "status": "todo",
@@ -70,12 +77,6 @@
     {
       "id": "M3",
       "title": "สถานะตลาด",
-      "status": "todo",
-      "fails": 0
-    },
-    {
-      "id": "M4",
-      "title": "AI Scan",
       "status": "todo",
       "fails": 0
     },
