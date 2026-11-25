@@ -1,5 +1,5 @@
 {
-  "version": "v4.2.0",
+  "version": "v4.2.1",
   "flags": {
     "disclaimer_footer": true
   },
@@ -28,15 +28,22 @@
   "entries": [
     {
       "date": "2026-11-25",
+      "version": "v4.2.1",
+      "changed": [
+        "scripts/run_protrade.py (Macro 1 + Micro 4 batches, 15s sleep for 5 RPM limit, multi-model auto-fallback)",
+        "data/heartbeat.json",
+        "data/analysis.json",
+        "data/changelog.json"
+      ]
+    },
+    {
+      "date": "2026-11-25",
       "version": "v4.2.0",
       "changed": [
         "index.html",
         "protrade_terminal.html",
         "scripts/run_protrade.py",
-        "data/watchlist.json",
-        "data/heartbeat.json",
-        "data/analysis.json",
-        "data/changelog.json"
+        "data/watchlist.json"
       ]
     }
   ],
@@ -55,7 +62,7 @@
     },
     {
       "id": "M4",
-      "title": "AI Scan (Macro 2 + Micro 18)",
+      "title": "AI Scan (Macro 1 + Micro 4 + Fallback)",
       "status": "done",
       "fails": 0
     },

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ProTrade 6-in-1 Self-Evolving Quant System Runner (Phase 0 - Phase 6)
-M4 Architecture: Dual-Macro + 18-Micro Budgeted Batching (2 Macro + up to 18 Micro = 20 Requests/Day)
+M4 Architecture: 1 Macro + 4 Micro-Batches = 5 Requests/Day (15s Pacing <= 4 RPM + Auto-Fallback)
 Designed for GitHub Actions + GitHub Pages autonomous daily execution.
 """
 
@@ -24,8 +24,17 @@ ET = ZoneInfo("America/New_York")
 BKK = ZoneInfo("Asia/Bangkok")
 DATA_DIR = "data"
 PROMPT_VERSION = "v4.2"
-SYSTEM_VERSION = "v4.2.0-Macro2-Micro18"
-MAX_MICRO_CALLS = 18
+SYSTEM_VERSION = "v4.2.1-Macro1-Micro4"
+
+MAX_MACRO_CALLS = 1
+MAX_MICRO_CALLS = 4
+SLEEP_SECONDS = 15  # <= 4 RPM (safe under 5 RPM Free Tier limit)
+FALLBACK_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3-flash",
+    "gemini-4-hydrogen",
+    "gemini-3.5-flash-lite",
+]
 
 
 def load_json(path, default=None):
@@ -167,10 +176,44 @@ def parse_json_response(resp_text):
     return json.loads(txt)
 
 
+def call_gemini_with_fallback(client, models_chain, contents, sys_instruction):
+    """Calls Gemini with automatic model fallback on 429 / quota / model errors."""
+    last_err = None
+    for idx, mdl in enumerate(models_chain):
+        try:
+            resp = client.models.generate_content(
+                model=mdl,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=sys_instruction,
+                    tools=[{"google_search": {}}],
+                    temperature=0.2,
+                ),
+            )
+            parsed = parse_json_response(resp.text)
+            return parsed, mdl
+        except Exception as e:
+            last_err = e
+            print(f"    [Fallback] Model '{mdl}' failed ({str(e)[:120]})")
+            if idx < len(models_chain) - 1:
+                time.sleep(3)
+    raise last_err
+
+
+def chunk_list(items, n_chunks):
+    """Splits a list into up to n_chunks roughly equal batches."""
+    if not items:
+        return []
+    n_chunks = max(1, min(n_chunks, len(items)))
+    k, m = divmod(len(items), n_chunks)
+    return [items[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n_chunks)]
+
+
 def main():
     force_run = os.getenv("FORCE_RUN", "false").lower() == "true"
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    model_name = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+    primary_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+    models_chain = list(dict.fromkeys([primary_model] + FALLBACK_MODELS))
 
     watchlist_cfg = load_json(f"{DATA_DIR}/watchlist.json", {
         "default": ["SPY", "QQQ", "DIA", "AAPL", "MSFT", "NVDA", "SKHY", "OKLO", "SMR", "LLY", "SCHD", "VGT", "BSX", "WDC", "DY", "CCJ", "GRAB"],
@@ -364,12 +407,19 @@ def main():
     meta_status = "ok"
     macro_calls_used = 0
     micro_calls_used = 0
+    models_used = []
 
-    # PHASE 2: DUAL-MACRO BATCH (2 Requests)
-    print("[M4] Running Dual-Macro Phase (2 Requests)...")
+    # ==============================================================
+    # PHASE 2: SINGLE MACRO CALL (Macro 1/1)
+    # ==============================================================
+    print(f"[M4] Running Macro Phase ({MAX_MACRO_CALLS} Request, Fallback Chain={models_chain})...")
+    macro_out = {
+        "macro_md": prev_rev.get("macro_md", "ไม่มีข้อมูล"),
+        "analyst_md": prev_rev.get("analyst_md", "ไม่มีข้อมูล"),
+        "critic_md": prev_rev.get("critic_md", "ไม่มีข้อมูล"),
+        "risk_md": prev_rev.get("risk_md", "ไม่มีข้อมูล"),
+    }
 
-    macro_md = prev_rev.get("macro_md", "ไม่มีข้อมูล")
-    analyst_md = prev_rev.get("analyst_md", "ไม่มีข้อมูล")
     try:
         benchmark_snap = {b: metrics_by_ticker.get(b) for b in benchmarks if b in metrics_by_ticker}
         sector_moves = {}
@@ -379,259 +429,226 @@ def main():
             if m.get("status") == "ok":
                 sector_moves.setdefault(sec, []).append({"ticker": sym, "pct_change": m["pct_change"], "move_atr": m["move_atr"]})
 
-        m1_payload = {
+        macro_payload = {
             "asof": expected_asof,
             "benchmarks": benchmark_snap,
             "sector_moves": sector_moves,
-            "active_rules": active_rules
-        }
-        m1_sys = f"""
-คุณคือ Macro Sentinel และ Lead Quant Strategist (PROMPT_VERSION={PROMPT_VERSION}-Macro1)
-หน้าที่: ค้นหาข่าวเศรษฐกิจมหภาคสหรัฐฯ ณ วันที่ {expected_asof} (ดอกเบี้ย Fed, บอนด์ยีลด์ 10Y, เงินเฟ้อ, ดัชนี SPY/QQQ) และวิเคราะห์การหมุนเวียนกลุ่มอุตสาหกรรม (Sector Rotation) จากข้อมูลราคาจริง
-
-ข้อจำกัด:
-- `macro_md`: ภาษาไทย ไม่เกิน 160 คำ แยกหัวข้อ **ข้อเท็จจริง** และ **การตีความ** พร้อมอ้างอิงข่าวจริง
-- `analyst_md`: ภาษาไทย ไม่เกิน 110 คำ สรุปธีมการถกเถียงภาพรวมระหว่างฝั่ง Bull และ Skeptic ของตลาดวันนี้
-
-ตอบเป็น JSON ล้วน:
-{{
-  "macro_md": "...",
-  "analyst_md": "..."
-}}
-"""
-        m1_resp = client.models.generate_content(
-            model=model_name,
-            contents=json.dumps(m1_payload, ensure_ascii=False),
-            config=types.GenerateContentConfig(
-                system_instruction=m1_sys,
-                tools=[{"google_search": {}}],
-                temperature=0.2,
-            ),
-        )
-        m1_json = parse_json_response(m1_resp.text)
-        macro_md = m1_json.get("macro_md", macro_md)
-        analyst_md = m1_json.get("analyst_md", analyst_md)
-        macro_calls_used += 1
-        print("  [Macro 1/2] Macro Sentinel & Sector Rotation completed.")
-    except Exception as e:
-        print(f"  [Warning] Macro 1/2 failed: {e}")
-        meta_status = "partial"
-
-    time.sleep(5)
-
-    critic_md = prev_rev.get("critic_md", "ไม่มีข้อมูล")
-    risk_md = prev_rev.get("risk_md", "ไม่มีข้อมูล")
-    try:
-        m2_payload = {
-            "asof": expected_asof,
-            "macro_context": macro_md,
-            "sectors": watchlist_cfg.get("sectors", {}),
             "risk_params": {
                 "risk_per_trade_pct": params.get("risk_per_trade_pct", 1.0),
                 "max_position_pct": params.get("max_position_pct", 15),
-                "sector_concentration_pct": params.get("sector_concentration_pct", 40)
+                "sector_concentration_pct": params.get("sector_concentration_pct", 40),
             },
             "decided_today_count": {
                 "hit": sum(1 for x in decided_today if x["outcome"] == "hit"),
                 "miss": sum(1 for x in decided_today if x["outcome"] == "miss"),
-                "n_a": sum(1 for x in decided_today if x["outcome"] == "n/a")
+                "n_a": sum(1 for x in decided_today if x["outcome"] == "n/a"),
             },
             "yesterday_summary": yesterday_summary,
-            "active_rules": active_rules
+            "active_rules": active_rules,
         }
-        m2_sys = f"""
-คุณคือ Critic (ผู้ตรวจสอบความผิดพลาด) และ Portfolio Risk Manager (PROMPT_VERSION={PROMPT_VERSION}-Macro2)
-หน้าที่: ตรวจสอบผลคำทำนายรอบก่อน (Hit/Miss) และประเมินความเสี่ยงการกระจุกตัวรายเซกเตอร์ของ Watchlist ทั้งพอร์ตเทียบกับเกณฑ์ความเสี่ยง
+        macro_sys = f"""
+คุณคือทีม 4 เอเจนต์ภาพรวม (Macro Sentinel, Lead Analyst, Critic และ Portfolio Risk Manager) (PROMPT_VERSION={PROMPT_VERSION}-Macro1)
+หน้าที่: ค้นหาข่าวเศรษฐกิจมหภาคสหรัฐฯ ณ วันที่ {expected_asof} (ดอกเบี้ย Fed, บอนด์ยีลด์ 10Y, เงินเฟ้อ, ดัชนี SPY/QQQ) และสรุปภาพรวมทั้งพอร์ต 17 ตัวในคำตอบเดียว
 
 ข้อจำกัด:
-- `critic_md`: ภาษาไทย ไม่เกิน 110 คำ สรุปผลตัดสินวันนี้ (hit/miss/n/a) จุดบอดที่พบ และการบังคับใช้กฎ `[R...]`
-- `risk_md`: ภาษาไทย ไม่เกิน 130 คำ วิเคราะห์ความเสี่ยงกระจุกตัวรายเซกเตอร์ (เช่น Semiconductors, Nuclear/Energy, Tech) ขนาด Position Sizing และเทียบกับ SPY/QQQ
+- `macro_md`: ภาษาไทย ไม่เกิน 150 คำ แยกหัวข้อ **ข้อเท็จจริง** และ **การตีความ** พร้อมอ้างอิงข่าวจริง
+- `analyst_md`: ภาษาไทย ไม่เกิน 100 คำ สรุปธีมการถกเถียงภาพรวมระหว่างฝั่ง Bull และ Skeptic วันนี้
+- `critic_md`: ภาษาไทย ไม่เกิน 100 คำ สรุปผลตัดสินวันนี้ (hit/miss/n/a) จุดบอด และการบังคับใช้กฎ `[R...]`
+- `risk_md`: ภาษาไทย ไม่เกิน 120 คำ วิเคราะห์ความเสี่ยงกระจุกตัวรายเซกเตอร์ (Semiconductors, Nuclear/Energy, Tech) เทียบกับ SPY/QQQ
 
 ตอบเป็น JSON ล้วน:
 {{
+  "macro_md": "...",
+  "analyst_md": "...",
   "critic_md": "...",
   "risk_md": "..."
 }}
 """
-        m2_resp = client.models.generate_content(
-            model=model_name,
-            contents=json.dumps(m2_payload, ensure_ascii=False),
-            config=types.GenerateContentConfig(
-                system_instruction=m2_sys,
-                temperature=0.2,
-            ),
+        m_json, used_mdl = call_gemini_with_fallback(
+            client,
+            models_chain,
+            json.dumps(macro_payload, ensure_ascii=False),
+            macro_sys,
         )
-        m2_json = parse_json_response(m2_resp.text)
-        critic_md = m2_json.get("critic_md", critic_md)
-        risk_md = m2_json.get("risk_md", risk_md)
-        macro_calls_used += 1
-        print("  [Macro 2/2] Critic & Portfolio Risk Manager completed.")
+        for k in ("macro_md", "analyst_md", "critic_md", "risk_md"):
+            if m_json.get(k):
+                macro_out[k] = m_json[k]
+        macro_calls_used = 1
+        models_used.append(used_mdl)
+        print(f"  [Macro 1/1] Completed using model '{used_mdl}'.")
     except Exception as e:
-        print(f"  [Warning] Macro 2/2 failed: {e}")
+        print(f"  [Warning] Macro 1/1 failed across all models: {e}")
         meta_status = "partial"
 
-    macro_out = {
-        "macro_md": macro_md,
-        "analyst_md": analyst_md,
-        "critic_md": critic_md,
-        "risk_md": risk_md
-    }
-
-    # PHASE 3: MICRO BATCH (Up to MAX_MICRO_CALLS = 18 Requests)
+    # ==============================================================
+    # PHASE 3: 4 MICRO-BATCHES (Micro 1..4 covering all 17 tickers)
+    # ==============================================================
     final_tickers = {}
     new_history_entries = []
     has_missing = False
 
-    ordered_tickers = sorted(
-        tickers_default,
-        key=lambda s: (
-            0 if metrics_by_ticker.get(s, {}).get("status") == "ok" else 1,
-            0 if metrics_by_ticker.get(s, {}).get("analysis_mode") == "full" else 1,
-            tickers_default.index(s)
-        )
-    )
-
-    print(f"[M4] Running Micro Phase (Budget: up to {MAX_MICRO_CALLS} Requests for {len(tickers_default)} tickers)...")
-    for sym in ordered_tickers:
+    valid_symbols = []
+    for sym in tickers_default:
         m = metrics_by_ticker.get(sym, {})
         if m.get("status") != "ok":
             has_missing = True
             final_tickers[sym] = {"status": "ไม่มีข้อมูล", "reason": m.get("reason", "ไม่มีข้อมูล")}
-            continue
+        else:
+            valid_symbols.append(sym)
 
-        if micro_calls_used >= MAX_MICRO_CALLS:
-            print(f"  [Budget Cap] Reached {MAX_MICRO_CALLS} micro calls; using fallback for {sym}.")
-            has_missing = True
-            prev_e = prev_analysis.get("tickers", {}).get(sym)
-            if prev_e and prev_e.get("status") != "ไม่มีข้อมูล":
-                fallback_entry = prev_e.copy()
-                fallback_entry["close"] = m["close"]
-                fallback_entry["source"] = f"Yahoo Finance ({expected_asof} close) [Budget Fallback]"
-                final_tickers[sym] = fallback_entry
-            else:
-                final_tickers[sym] = {"status": "ไม่มีข้อมูล", "reason": f"เกินงบคำสั่ง Micro ({MAX_MICRO_CALLS} calls/day)"}
-            continue
+    batches = chunk_list(valid_symbols, MAX_MICRO_CALLS)
+    print(f"[M4] Running Micro Phase ({len(batches)} Batches covering {len(valid_symbols)} valid tickers, sleep={SLEEP_SECONDS}s)...")
 
-        micro_calls_used += 1
-        print(f"  [Micro {micro_calls_used}/{MAX_MICRO_CALLS}] Analyzing {sym} (mode={m['analysis_mode']})...")
-        time.sleep(5)
+    for b_idx, batch_syms in enumerate(batches, start=1):
+        print(f"  [Micro Batch {b_idx}/{len(batches)}] Tickers: {batch_syms} (waiting {SLEEP_SECONDS}s for 5 RPM limit)...")
+        time.sleep(SLEEP_SECONDS)
 
         try:
-            micro_prompt = {
-                "ticker": sym,
-                "sector": watchlist_cfg.get("sectors", {}).get(sym, "Unknown"),
+            batch_metrics = {}
+            for sym in batch_syms:
+                m = metrics_by_ticker[sym]
+                batch_metrics[sym] = {
+                    "sector": watchlist_cfg.get("sectors", {}).get(sym, "Unknown"),
+                    "close": m["close"],
+                    "pct_change": m["pct_change"],
+                    "sma20": m["sma20"],
+                    "sma50": m["sma50"],
+                    "rsi14": m["rsi14"],
+                    "atr14": m["atr14"],
+                    "move_atr": m["move_atr"],
+                    "vol_ratio_20d": m["vol_ratio_20d"],
+                    "support": m["support"],
+                    "resistance": m["resistance"],
+                    "bull_invalidation": m["bull_invalidation"],
+                    "bear_invalidation": m["bear_invalidation"],
+                    "analysis_mode": m["analysis_mode"],
+                    "yesterday": yesterday_summary.get(sym),
+                }
+
+            micro_payload = {
                 "asof": expected_asof,
-                "macro_summary": macro_md[:500],
-                "market_metrics": {sym: m},
+                "macro_summary": macro_out["macro_md"][:450],
+                "tickers": batch_metrics,
                 "active_rules": active_rules,
-                "yesterday": yesterday_summary.get(sym)
             }
             micro_sys = f"""
-คุณคือ Quant Analyst (Bull vs Skeptic) สำหรับหุ้น {sym} (PROMPT_VERSION={PROMPT_VERSION}-Micro)
-หน้าที่: วิเคราะห์เจาะลึกเฉพาะหุ้น {sym} โดยอิงบริบทมหภาคและใช้ Google Search หาข่าว/ตัวเร่ง (Catalyst) ล่าสุดของ {sym}
+คุณคือ Quant Analyst (Bull vs Skeptic) วิเคราะห์หุ้นชุด {batch_syms} ณ วันที่ {expected_asof} (PROMPT_VERSION={PROMPT_VERSION}-MicroBatch{b_idx})
+หน้าที่: ใช้ Google Search ค้นหาข่าว/ตัวเร่ง (Catalyst) ล่าสุดของหุ้นทุกตัวในกลุ่ม {batch_syms} แล้ววิเคราะห์เจาะจงรายตัว
 
 กฎเหล็ก:
-1. ห้ามเดาตัวเลข levels เอง ให้ใช้ค่าจาก market_metrics:
+1. ห้ามเดาตัวเลข levels เอง ให้ใช้ค่าจาก tickers[SYM] เท่านั้น:
    - ถ้า bias="bull": invalidation = bull_invalidation
    - ถ้า bias="bear": invalidation = bear_invalidation
    - ถ้า bias="neutral": invalidation = null
 2. บังคับใช้กฎใน active_rules และอ้างอิงรหัสกฎเช่น [R001] หากเข้าเงื่อนไข
-3. ตอบเป็น JSON ล้วน (horizon ต้องเป็น 1d, 3d, หรือ 5d):
+3. ตอบเป็น JSON ล้วน โดยมี key เป็นชื่อหุ้นทุกตัวใน {batch_syms} (horizon ต้องเป็น 1d, 3d, หรือ 5d):
 {{
-  "bias": "bull/bear/neutral",
-  "confidence": 80,
-  "horizon": "3d",
-  "reasons": ["(Bull) ...", "(Skeptic) ..."],
-  "risks": ["(Skeptic) ...", "(Bull) ..."],
-  "catalyst": "ข่าวหรือปัจจัยเร่งเฉพาะเจาะจงของหุ้น...",
-  "long_term": {{"view": "...", "zone": "..."}}
+  "TICKER": {{
+    "bias": "bull/bear/neutral",
+    "confidence": 80,
+    "horizon": "3d",
+    "reasons": ["(Bull) ...", "(Skeptic) ..."],
+    "risks": ["(Skeptic) ...", "(Bull) ..."],
+    "catalyst": "ข่าวหรือปัจจัยเร่งเฉพาะเจาะจงของหุ้น...",
+    "long_term": {{"view": "...", "zone": "..."}}
+  }}
 }}
 """
-            micro_resp = client.models.generate_content(
-                model=model_name,
-                contents=json.dumps(micro_prompt, ensure_ascii=False),
-                config=types.GenerateContentConfig(
-                    system_instruction=micro_sys,
-                    tools=[{"google_search": {}}],
-                    temperature=0.2,
-                ),
+            batch_ai, used_mdl = call_gemini_with_fallback(
+                client,
+                models_chain,
+                json.dumps(micro_payload, ensure_ascii=False),
+                micro_sys,
             )
-            t_ai = parse_json_response(micro_resp.text)
+            micro_calls_used += 1
+            if used_mdl not in models_used:
+                models_used.append(used_mdl)
+            print(f"    -> Batch {b_idx}/{len(batches)} succeeded via '{used_mdl}'.")
 
-            bias = t_ai.get("bias", "neutral")
-            if bias not in ("bull", "bear", "neutral"):
-                bias = "neutral"
-            conf = int(max(0, min(100, round(float(t_ai.get("confidence", 50))))))
-            horizon = t_ai.get("horizon", "3d")
-            if horizon not in ("1d", "3d", "5d"):
-                horizon = "3d"
+            for sym in batch_syms:
+                m = metrics_by_ticker[sym]
+                t_ai = batch_ai.get(sym) if isinstance(batch_ai, dict) else None
+                if not isinstance(t_ai, dict):
+                    has_missing = True
+                    meta_status = "partial"
+                    final_tickers[sym] = {"status": "ไม่มีข้อมูล", "reason": "AI ไม่ได้ส่งผลวิเคราะห์ของหุ้นตัวนี้กลับมาในชุด"}
+                    continue
 
-            close_px = m["close"]
-            sup = m["support"]
-            res = m["resistance"]
-            if bias == "bull":
-                inv = m["bull_invalidation"]
-                if inv >= close_px:
-                    inv = round(close_px - max(0.5, (m["atr14"] or 1.0) * 0.5), 2)
-            elif bias == "bear":
-                inv = m["bear_invalidation"]
-                if inv <= close_px:
-                    inv = round(close_px + max(0.5, (m["atr14"] or 1.0) * 0.5), 2)
-            else:
-                inv = None
+                bias = t_ai.get("bias", "neutral")
+                if bias not in ("bull", "bear", "neutral"):
+                    bias = "neutral"
+                conf = int(max(0, min(100, round(float(t_ai.get("confidence", 50))))))
+                horizon = t_ai.get("horizon", "3d")
+                if horizon not in ("1d", "3d", "5d"):
+                    horizon = "3d"
 
-            reasons = [str(x) for x in (t_ai.get("reasons") or [])][:3]
-            risks = [str(x) for x in (t_ai.get("risks") or [])][:2]
+                close_px = m["close"]
+                sup = m["support"]
+                res = m["resistance"]
+                if bias == "bull":
+                    inv = m["bull_invalidation"]
+                    if inv >= close_px:
+                        inv = round(close_px - max(0.5, (m["atr14"] or 1.0) * 0.5), 2)
+                elif bias == "bear":
+                    inv = m["bear_invalidation"]
+                    if inv <= close_px:
+                        inv = round(close_px + max(0.5, (m["atr14"] or 1.0) * 0.5), 2)
+                else:
+                    inv = None
 
-            final_tickers[sym] = {
-                "close": close_px,
-                "source": m["source"],
-                "atr14": m["atr14"],
-                "move_atr": m["move_atr"],
-                "analysis_mode": m["analysis_mode"],
-                "last_full_date": m["last_full_date"],
-                "bias": bias,
-                "confidence": conf,
-                "horizon": horizon,
-                "levels": {"support": sup, "resistance": res, "invalidation": inv},
-                "reasons": reasons,
-                "risks": risks,
-                "catalyst": t_ai.get("catalyst", "ไม่มีข้อมูล"),
-                "long_term": t_ai.get("long_term", {"view": "ไม่มีข้อมูล", "zone": "ไม่มีข้อมูล"}),
-                "yesterday": yesterday_summary.get(sym, {"call": "", "result": "n/a", "note": "ไม่มีรายการครบกำหนด"})
-            }
+                reasons = [str(x) for x in (t_ai.get("reasons") or [])][:3]
+                risks = [str(x) for x in (t_ai.get("risks") or [])][:2]
 
-            h_days = int(horizon.replace("d", ""))
-            new_history_entries.append({
-                "date": expected_asof,
-                "ticker": sym,
-                "bias": bias,
-                "confidence": conf,
-                "horizon": horizon,
-                "entry_close": close_px,
-                "invalidation": inv,
-                "atr14": m["atr14"],
-                "target_date": add_trading_days(expected_asof, h_days, holidays),
-                "prompt_version": PROMPT_VERSION + "-Micro",
-                "config_version": config.get("config_version", 1),
-                "outcome": None,
-                "outcome_close": None,
-                "outcome_date": None
-            })
+                final_tickers[sym] = {
+                    "close": close_px,
+                    "source": m["source"],
+                    "atr14": m["atr14"],
+                    "move_atr": m["move_atr"],
+                    "analysis_mode": m["analysis_mode"],
+                    "last_full_date": m["last_full_date"],
+                    "bias": bias,
+                    "confidence": conf,
+                    "horizon": horizon,
+                    "levels": {"support": sup, "resistance": res, "invalidation": inv},
+                    "reasons": reasons,
+                    "risks": risks,
+                    "catalyst": t_ai.get("catalyst", "ไม่มีข้อมูล"),
+                    "long_term": t_ai.get("long_term", {"view": "ไม่มีข้อมูล", "zone": "ไม่มีข้อมูล"}),
+                    "yesterday": yesterday_summary.get(sym, {"call": "", "result": "n/a", "note": "ไม่มีรายการครบกำหนด"}),
+                }
+
+                h_days = int(horizon.replace("d", ""))
+                new_history_entries.append({
+                    "date": expected_asof,
+                    "ticker": sym,
+                    "bias": bias,
+                    "confidence": conf,
+                    "horizon": horizon,
+                    "entry_close": close_px,
+                    "invalidation": inv,
+                    "atr14": m["atr14"],
+                    "target_date": add_trading_days(expected_asof, h_days, holidays),
+                    "prompt_version": f"{PROMPT_VERSION}-MicroBatch",
+                    "config_version": config.get("config_version", 1),
+                    "outcome": None,
+                    "outcome_close": None,
+                    "outcome_date": None,
+                })
 
         except Exception as e:
-            print(f"  [Warning] Micro analysis failed for {sym}: {e}")
+            print(f"  [Warning] Micro Batch {b_idx}/{len(batches)} failed across all models: {e}")
             has_missing = True
             meta_status = "partial"
-
-            prev_e = prev_analysis.get("tickers", {}).get(sym)
-            if prev_e and prev_e.get("status") != "ไม่มีข้อมูล":
-                fallback_entry = prev_e.copy()
-                fallback_entry["close"] = m["close"]
-                fallback_entry["source"] = f"Yahoo Finance ({expected_asof} close) [AI Fallback]"
-                final_tickers[sym] = fallback_entry
-            else:
-                final_tickers[sym] = {"status": "ไม่มีข้อมูล", "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"}
+            for sym in batch_syms:
+                m = metrics_by_ticker[sym]
+                prev_e = prev_analysis.get("tickers", {}).get(sym)
+                if prev_e and prev_e.get("status") != "ไม่มีข้อมูล":
+                    fallback_entry = prev_e.copy()
+                    fallback_entry["close"] = m["close"]
+                    fallback_entry["source"] = f"Yahoo Finance ({expected_asof} close) [AI Fallback]"
+                    final_tickers[sym] = fallback_entry
+                else:
+                    final_tickers[sym] = {"status": "ไม่มีข้อมูล", "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"}
 
     ordered_final_tickers = {sym: final_tickers[sym] for sym in tickers_default if sym in final_tickers}
 
@@ -657,6 +674,8 @@ def main():
     if meta_status != "failed" and has_missing:
         meta_status = "partial"
 
+    active_model_label = ", ".join(models_used) if models_used else primary_model
+
     analysis_doc = {
         "meta": {
             "asof": expected_asof,
@@ -664,12 +683,17 @@ def main():
             "version": SYSTEM_VERSION,
             "prompt_version": PROMPT_VERSION,
             "config_version": config.get("config_version", 1),
-            "model": model_name,
-            "api_calls": {"macro": macro_calls_used, "micro": micro_calls_used, "max_micro": MAX_MICRO_CALLS},
-            "status": meta_status
+            "model": active_model_label,
+            "api_calls": {
+                "macro": macro_calls_used,
+                "max_macro": MAX_MACRO_CALLS,
+                "micro": micro_calls_used,
+                "max_micro": MAX_MICRO_CALLS,
+            },
+            "status": meta_status,
         },
         "market_review": macro_out,
-        "tickers": ordered_final_tickers
+        "tickers": ordered_final_tickers,
     }
     save_json(f"{DATA_DIR}/analysis.json", analysis_doc)
 
@@ -678,10 +702,10 @@ def main():
         "expected_asof": expected_asof,
         "last_ok_asof": expected_asof if meta_status != "failed" else heartbeat.get("last_ok_asof"),
         "status": meta_status,
-        "note": f"Macro {macro_calls_used}/2 + Micro {micro_calls_used}/{MAX_MICRO_CALLS} ({len(ordered_final_tickers)} tickers)"
+        "note": f"Macro {macro_calls_used}/{MAX_MACRO_CALLS} + Micro {micro_calls_used}/{MAX_MICRO_CALLS} ({len(ordered_final_tickers)} tickers, models={active_model_label})",
     })
     save_json(f"{DATA_DIR}/heartbeat.json", heartbeat)
-    print(f"[Success] ProTrade run completed for {expected_asof} (Macro={macro_calls_used}/2, Micro={micro_calls_used}/{MAX_MICRO_CALLS}, status={meta_status}).")
+    print(f"[Success] ProTrade run completed for {expected_asof} (Macro={macro_calls_used}/{MAX_MACRO_CALLS}, Micro={micro_calls_used}/{MAX_MICRO_CALLS}, status={meta_status}).")
 
 
 if __name__ == "__main__":
@@ -695,7 +719,7 @@ if __name__ == "__main__":
         hb_err.update({
             "last_checked": datetime.now(BKK).isoformat(timespec="seconds"),
             "status": "failed",
-            "note": f"Error: {str(exc)[:150]}"
+            "note": f"Error: {str(exc)[:150]}",
         })
         save_json(f"{DATA_DIR}/heartbeat.json", hb_err)
         sys.exit(1)
