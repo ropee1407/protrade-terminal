@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       force_run:
-        description: 'Force run'
+        description: 'บังคับรันใหม่แม้วันทำการล่าสุดจะรันไปแล้ว (true/false)'
         required: false
         default: 'false'
 
@@ -48,6 +48,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "chore(data): autonomous update"
+            git commit -m "chore(data): autonomous ProTrade update $(date -u +'%Y-%m-%d %H:%M UTC')"
             git push
           fi
