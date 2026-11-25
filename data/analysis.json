@@ -1,7 +1,7 @@
 {
   "meta": {
     "asof": "2026-11-24",
-    "generated_at": "2026-11-25T13:45:00+07:00",
+    "generated_at": "2026-11-25T13:52:53+07:00",
     "version": "v4.2.1-Macro1-Micro4",
     "prompt_version": "v4.2",
     "config_version": 1,
@@ -12,8 +12,82 @@
       "micro": 0,
       "max_micro": 4
     },
-    "status": "pending"
+    "status": "failed"
   },
-  "market_review": {},
-  "tickers": {}
+  "market_review": {
+    "macro_md": "ไม่มีข้อมูล",
+    "analyst_md": "ไม่มีข้อมูล",
+    "critic_md": "ไม่มีข้อมูล",
+    "risk_md": "ไม่มีข้อมูล"
+  },
+  "tickers": {
+    "SPY": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "QQQ": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "DIA": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "AAPL": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "MSFT": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "NVDA": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "SKHY": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "OKLO": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "SMR": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "LLY": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "SCHD": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "VGT": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "BSX": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "WDC": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "DY": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "CCJ": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    },
+    "GRAB": {
+      "status": "ไม่มีข้อมูล",
+      "reason": "AI ไม่สามารถสรุปข้อมูลได้ (API Rate Limit หรือเกิดข้อผิดพลาด)"
+    }
+  }
 }
