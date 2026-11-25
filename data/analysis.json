@@ -1,0 +1,85 @@
+{
+  "meta": {
+    "asof": "2026-11-24",
+    "generated_at": "2026-11-25T09:12:00+07:00",
+    "version": "v3.1.0",
+    "prompt_version": "v3.0",
+    "config_version": 1,
+    "model": "gemini-2.5-flash",
+    "status": "ok"
+  },
+  "market_review": {
+    "macro_md": "### ข้อเท็จจริง\n- **NVDA Profit-Taking (2026-11-24):** หุ้นกลุ่มเซมิคอนดักเตอร์ถูกเทขายทำกำไรหลังพุ่งแรงเมื่อต้นสัปดาห์\n- **AAPL Safe Haven (2026-11-24):** ปิดบวก +1.43% สวนทางตลาดเทคโนโลยี\n\n### การตีความ\n- เม็ดเงินกำลังหมุนเวียน (Capital Rotation) ออกจากหุ้นชิปที่ร้อนแรงเข้าสู่หุ้นพื้นฐานแกร่ง",
+    "analyst_md": "### สรุปการถกเถียง (Bull vs Skeptic)\nฝั่ง Bull มองเทรนด์ระยะยาวของ AI และ Consumer Tech ยังแข็งแกร่ง ขณะที่ฝั่ง Skeptic เตือนให้ระวังแรงขายทำกำไรระยะสั้นหลังราคาดีดตัวแรงเกิน 3 ATR",
+    "critic_md": "### รายงานผู้ตรวจสอบ (Critic)\n- บังคับใช้กฎ `[R001]` ห้ามเปิดตามน้ำในกรอบ 1d หลังเกิด Extreme Move และ `[R002]` เพิ่มน้ำหนักหลุมหลบภัยกลุ่ม Consumer Tech",
+    "risk_md": "### การจัดการความเสี่ยงพอร์ต\n- ควบคุมความเสี่ยงต่อไม้ไม่เกิน 1.0% ของพอร์ต และจำกัดน้ำหนักรายตัวไม่เกิน 15% เพื่อลดการกระจุกตัวในกลุ่ม Tech/Semiconductors"
+  },
+  "tickers": {
+    "NVDA": {
+      "close": 155.38,
+      "source": "Market Close (2026-11-24)",
+      "atr14": 5.2,
+      "move_atr": 1.85,
+      "analysis_mode": "full",
+      "last_full_date": "2026-11-24",
+      "bias": "bear",
+      "confidence": 75,
+      "horizon": "3d",
+      "levels": {
+        "support": 148.0,
+        "resistance": 165.0,
+        "invalidation": 167.6
+      },
+      "reasons": [
+        "(Skeptic) เกิดแรงเทขายทำกำไรหลังดีดตัวรุนแรง เข้าเงื่อนไขกฎ [R001] ห้ามเปิดตามน้ำระยะสั้น",
+        "(Skeptic) เม็ดเงินหมุนออกจากกลุ่ม Semiconductors ชั่วคราว"
+      ],
+      "risks": [
+        "(Bull) แนวโน้มอุปสงค์โครงสร้างพื้นฐาน AI ระยะยาวยังแข็งแกร่ง อาจมีแรงซื้อรับที่แนวรับ"
+      ],
+      "catalyst": "Post-rally profit taking & sector rotation",
+      "long_term": {
+        "view": "ผู้นำโครงสร้างพื้นฐาน AI ระยะยาว รอจังหวะพักฐานจบ",
+        "zone": "140.00 - 145.00"
+      },
+      "yesterday": {
+        "call": "bull 3d",
+        "result": "miss",
+        "note": "ถูกแรงขายทำกำไรช่วงเปิดตลาด"
+      }
+    },
+    "AAPL": {
+      "close": 354.07,
+      "source": "Market Close (2026-11-24)",
+      "atr14": 4.1,
+      "move_atr": 1.22,
+      "analysis_mode": "full",
+      "last_full_date": "2026-11-24",
+      "bias": "bull",
+      "confidence": 80,
+      "horizon": "5d",
+      "levels": {
+        "support": 345.0,
+        "resistance": 360.0,
+        "invalidation": 342.95
+      },
+      "reasons": [
+        "(Bull) กระแสเงินทุนไหลเข้าหลบภัยตามกฎ [R002] ปิดบวก +1.43% สวนทางกลุ่มชิป",
+        "(Bull) วอลุ่มซื้อขาย 39.8 ล้านหุ้นยืนยันแรงรับที่แข็งแกร่ง"
+      ],
+      "risks": [
+        "(Skeptic) หากดัชนีรวมปรับฐานแรงอาจกดดันกรอบบนระยะสั้น"
+      ],
+      "catalyst": "Capital rotation into quality large-cap tech",
+      "long_term": {
+        "view": "กระแสเงินสดแข็งแกร่งและระบบนิเวศผู้ใช้มั่นคง",
+        "zone": "330.00 - 340.00"
+      },
+      "yesterday": {
+        "call": "neutral 3d",
+        "result": "hit",
+        "note": "ยืนเหนือแนวรับได้แข็งแกร่ง"
+      }
+    }
+  }
+}
