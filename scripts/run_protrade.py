@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ProTrade 6-in-1 Self-Evolving Quant System Runner
-v4.2.11: Added Retry Logic for Individual Tickers if Batch Download Fails
+v4.2.12: Removed DY (13 Tickers total), Added Retry Logic for Individual Tickers
 """
 
 import os
@@ -23,7 +23,7 @@ ET = ZoneInfo("America/New_York")
 BKK = ZoneInfo("Asia/Bangkok")
 DATA_DIR = "data"
 PROMPT_VERSION = "v4.2"
-SYSTEM_VERSION = "v4.2.11-Strict-BatchWithRetry"
+SYSTEM_VERSION = "v4.2.12-Strict-BatchWithRetry"
 
 MAX_MACRO_CALLS = 1
 MAX_MICRO_CALLS = 4
@@ -230,7 +230,7 @@ def chunk_list(items, n_chunks):
     return [items[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n_chunks)]
 
 def main():
-    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] ProTrade Script Started (v4.2.11)")
+    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] ProTrade Script Started (v4.2.12)")
     force_run = os.getenv("FORCE_RUN", "false").lower() == "true"
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     primary_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
@@ -248,8 +248,9 @@ def main():
         
     models_chain = list(dict.fromkeys([primary_model] + fallback_models))
 
+    # เอา DY ออก เหลือ 13 ตัว
     watchlist_cfg = load_json(f"{DATA_DIR}/watchlist.json", {
-        "default": ["SPY", "QQQ", "DIA", "MSFT", "NVDA", "SKHY", "OKLO", "LLY", "SCHD", "VGT", "BSX", "WDC", "DY", "CCJ"],
+        "default": ["SPY", "QQQ", "DIA", "MSFT", "NVDA", "SKHY", "OKLO", "LLY", "SCHD", "VGT", "BSX", "WDC", "CCJ"],
         "benchmarks": ["SPY", "QQQ"],
         "sectors": {},
         "holidays": [],
