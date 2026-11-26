@@ -1,7 +1,7 @@
 {
-  "last_checked": "2026-11-26T12:00:22+07:00",
+  "last_checked": "2026-11-26T16:06:19+07:00",
   "expected_asof": "2026-11-25",
   "last_ok_asof": "2026-11-25",
-  "status": "ok",
-  "note": "Macro 1/1 + Micro 4/4 (17 tickers, models=gemini-3.8-flash, gemini-3.5-flash-lite, search=off)"
+  "status": "partial",
+  "note": "Macro 1/1 + Micro 3/4 (13 tickers, models=gemini-4-hydrogen, gemini-3.5-flash-lite)"
 }
