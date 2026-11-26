@@ -25,7 +25,7 @@ ET = ZoneInfo("America/New_York")
 BKK = ZoneInfo("Asia/Bangkok")
 DATA_DIR = "data"
 PROMPT_VERSION = "v4.2"
-SYSTEM_VERSION = "v4.2.3-Macro1-Micro4"
+SYSTEM_VERSION = "v4.2.5-Macro1-Micro4"
 
 MAX_MACRO_CALLS = 1
 MAX_MICRO_CALLS = 4
@@ -218,37 +218,78 @@ def _block_model(model, seconds, reason):
     print(f"    [Skip] Model '{model}' unavailable ({reason}) -> skipped for {scope}.")
 
 
+SEARCH_STATE = {"enabled": os.getenv("USE_SEARCH", "true").strip().lower() != "false"}
+NO_SEARCH_NOTE = (
+    "\n\n[ข้อจำกัดของรอบนี้] ไม่มีการค้นหาเว็บในรอบนี้ ห้ามสร้างข่าว เหตุการณ์ หรือตัวเลขที่ไม่ได้อยู่ในข้อมูลที่ให้มา "
+    "ใช้เฉพาะข้อมูลราคา ตัวชี้วัด และกฎใน lessons เท่านั้น ช่อง catalyst ให้ระบุเฉพาะปัจจัยที่อนุมานได้จากข้อมูลที่ให้ "
+    "หรือเขียนว่า 'ไม่มีข้อมูลข่าวในรอบนี้'"
+)
+
+
+def _generate(client, mdl, contents, sys_instruction, use_search):
+    cfg = dict(
+        system_instruction=sys_instruction + ("" if use_search else NO_SEARCH_NOTE),
+        temperature=0.2,
+    )
+    if use_search:
+        cfg["tools"] = [{"google_search": {}}]
+    return client.models.generate_content(
+        model=mdl,
+        contents=contents,
+        config=types.GenerateContentConfig(**cfg),
+    )
+
+
 def call_gemini_with_fallback(client, models_chain, contents, sys_instruction):
     """Try models in order. Skips models already known to be unusable, waits and retries once on
-    short rate limits / 5xx, and remembers 404/400/403 (bad model) and exhausted quota."""
+    short rate limits / 5xx, remembers bad models and exhausted quota, and if a 429 is caused by
+    Google Search grounding itself, continues without search for the rest of the run."""
     usable = [m for m in models_chain if not _is_blocked(m)]
     if not usable:
         raise RuntimeError(f"no usable model left in chain {models_chain} (all blocked this run)")
 
     last_err = None
     for idx, mdl in enumerate(usable):
+        tried_no_search = False
         for attempt in (1, 2):
             try:
-                resp = client.models.generate_content(
-                    model=mdl,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=sys_instruction,
-                        tools=[{"google_search": {}}],
-                        temperature=0.2,
-                    ),
-                )
-                parsed = parse_json_response(resp.text)
-                return parsed, mdl
+                resp = _generate(client, mdl, contents, sys_instruction, SEARCH_STATE["enabled"])
+                return parse_json_response(resp.text), mdl
             except Exception as e:
                 last_err = e
                 code = _err_code(e)
-                print(f"    [Fallback] Model '{mdl}' failed (attempt {attempt}, code={code}): {str(e)[:160]}")
+                print(f"    [Fallback] Model '{mdl}' failed (attempt {attempt}, code={code}, search={SEARCH_STATE['enabled']}): {str(e)[:160]}")
                 if code == 429:
                     delay = _retry_delay(e)
                     if attempt == 1 and delay is not None and delay <= 60:
                         time.sleep(delay + 1)  # short per-minute limit: wait, retry same model once
                         continue
+                    if SEARCH_STATE["enabled"] and not tried_no_search:
+                        # Is it the model's quota, or Google Search grounding being rejected? Test without search.
+                        # A 5xx during the test is a capacity problem (not quota), so retry it a couple of times.
+                        tried_no_search = True
+                        test_resp, test_code = None, None
+                        for t_try in (1, 2, 3):
+                            try:
+                                test_resp = _generate(client, mdl, contents, sys_instruction, False)
+                                break
+                            except Exception as e2:
+                                last_err, test_code = e2, _err_code(e2)
+                                print(f"    [Search-test] '{mdl}' without search -> code={test_code} (try {t_try}/3)")
+                                if test_code in (500, 502, 503, 504) and t_try < 3:
+                                    time.sleep(10)
+                                    continue
+                                break
+                        if test_resp is not None:
+                            SEARCH_STATE["enabled"] = False
+                            print(f"    [Search] Google Search grounding is rejected (429) but '{mdl}' works without it -> "
+                                  f"continuing WITHOUT Google Search for the rest of this run.")
+                            return parse_json_response(test_resp.text), mdl
+                        if test_code != 429:
+                            # Not a quota rejection (e.g. 503 overload): inconclusive, do not blame or block the model.
+                            print(f"    [Search-test] inconclusive for '{mdl}' (code={test_code}); not blocking it, trying next model.")
+                            break
+                        print(f"    [Search-test] '{mdl}' also 429 without search -> model quota/key issue, not grounding.")
                     _block_model(mdl, QUOTA_COOLDOWN_SECONDS, "429 quota exhausted")
                 elif code in (500, 502, 503, 504):
                     if attempt == 1:
@@ -760,6 +801,7 @@ def main():
             "prompt_version": PROMPT_VERSION,
             "config_version": config.get("config_version", 1),
             "model": active_model_label,
+            "search_grounding": SEARCH_STATE["enabled"],
             "api_calls": {
                 "macro": macro_calls_used,
                 "max_macro": MAX_MACRO_CALLS,
@@ -778,7 +820,7 @@ def main():
         "expected_asof": expected_asof,
         "last_ok_asof": expected_asof if meta_status != "failed" else heartbeat.get("last_ok_asof"),
         "status": meta_status,
-        "note": f"Macro {macro_calls_used}/{MAX_MACRO_CALLS} + Micro {micro_calls_used}/{MAX_MICRO_CALLS} ({len(ordered_final_tickers)} tickers, models={active_model_label})",
+        "note": f"Macro {macro_calls_used}/{MAX_MACRO_CALLS} + Micro {micro_calls_used}/{MAX_MICRO_CALLS} ({len(ordered_final_tickers)} tickers, models={active_model_label}, search={'on' if SEARCH_STATE['enabled'] else 'off'})",
     })
     save_json(f"{DATA_DIR}/heartbeat.json", heartbeat)
     print(f"[Success] ProTrade run completed for {expected_asof} (Macro={macro_calls_used}/{MAX_MACRO_CALLS}, Micro={micro_calls_used}/{MAX_MICRO_CALLS}, status={meta_status}).")
