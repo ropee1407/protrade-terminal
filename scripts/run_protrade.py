@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ProTrade 6-in-1 Self-Evolving Quant System Runner
-v4.2.7: Strict All-Stock Requirement, yfinance Retry & Spoofing
+v4.2.8: Fixed hanging on 17th request by disabling session pool exhaustion
 """
 
 import os
@@ -16,7 +16,6 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import requests
 from google import genai
 from google.genai import types
 
@@ -24,7 +23,7 @@ ET = ZoneInfo("America/New_York")
 BKK = ZoneInfo("Asia/Bangkok")
 DATA_DIR = "data"
 PROMPT_VERSION = "v4.2"
-SYSTEM_VERSION = "v4.2.7-Strict-AllStocks"
+SYSTEM_VERSION = "v4.2.8-Strict-NoHang"
 
 MAX_MACRO_CALLS = 1
 MAX_MICRO_CALLS = 4
@@ -231,7 +230,7 @@ def chunk_list(items, n_chunks):
     return [items[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n_chunks)]
 
 def main():
-    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] ProTrade Script Started (v4.2.7)")
+    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] ProTrade Script Started (v4.2.8)")
     force_run = os.getenv("FORCE_RUN", "false").lower() == "true"
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     primary_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
@@ -309,14 +308,6 @@ def main():
     metrics_by_ticker = {}
     monthly_price_updates = {}
 
-    # ตั้งค่า requests session เพื่อจำลองเป็นเบราว์เซอร์ ป้องกัน yfinance โดนบล็อก
-    yf_session = requests.Session()
-    yf_session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': '*/*',
-        'Accept-Encoding': 'gzip, deflate, br'
-    })
-
     print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] Starting Phase 1: Downloading data for {len(all_symbols)} symbols (Strict Mode)...")
 
     for sym in all_symbols:
@@ -325,12 +316,12 @@ def main():
         df = pd.DataFrame()
         success = False
         last_fetch_err = ""
-        max_retries = 5
+        max_retries = 3
         
-        # ระบบจัดการค้าง: วนลูปพยายามดึงข้อมูล 5 ครั้ง (Timeout ครั้งละ 10 วิ)
         for attempt in range(max_retries):
             try:
-                df = yf.download(sym, period="4mo", interval="1d", auto_adjust=False, progress=False, timeout=10, session=yf_session)
+                # v4.2.8: ไม่ใช้ requests.Session แล้ว ปล่อยให้มันเปิด-ปิด connection ใหม่เสมอ ป้องกัน connection pool เต็มตอนตัวที่ 17
+                df = yf.download(sym, period="4mo", interval="1d", auto_adjust=False, progress=False, timeout=10)
                 if not df.empty:
                     success = True
                     break
@@ -339,12 +330,10 @@ def main():
             except Exception as e:
                 last_fetch_err = str(e)
             
-            # ถ้าดึงไม่สำเร็จ ให้รอ 3 วินาทีแล้วลองใหม่
             if attempt < max_retries - 1:
                 print(f" retry({attempt+1})...", end="", flush=True)
                 time.sleep(3)
                 
-        # หากพยายามครบ 5 ครั้งแล้วยังไม่ได้ ให้ระเบิด Error เพื่อบังคับหยุด (ตาม Requirement ที่ห้ามข้าม)
         if not success:
             critical_msg = f"CRITICAL ERROR: ไม่สามารถดึงข้อมูลหุ้น {sym} ได้หลังจากพยายาม {max_retries} ครั้ง (Error: {last_fetch_err[:100]}). บังคับหยุดระบบเพื่อป้องกันการวิเคราะห์หุ้นไม่ครบ 17 ตัว"
             print(f"\n{critical_msg}")
@@ -620,7 +609,6 @@ def main():
                 m = metrics_by_ticker[sym]
                 t_ai = batch_ai.get(sym) if isinstance(batch_ai, dict) else None
                 if not isinstance(t_ai, dict):
-                    # ถ้าระบบตอบกลับมาผิดรูปแบบ จะถือเป็น partial
                     meta_status = "partial"
                     final_tickers[sym] = {"status": "ไม่มีข้อมูล", "reason": "AI ไม่ได้ส่งผลวิเคราะห์ของหุ้นตัวนี้กลับมาในชุด"}
                     continue
