@@ -250,7 +250,7 @@ def main():
 
     watchlist_cfg = load_json(f"{DATA_DIR}/watchlist.json", {
         # เอา GRAB, AAPL, SMR ออกตามสั่ง เหลือ 14 ตัว
-        "default": ["SPY", "QQQ", "DIA", "MSFT", "NVDA", "SKHY", "OKLO", "LLY", "SCHD", "VGT", "BSX", "WDC", "DY", "CCJ"],
+        "default": ["SPY", "QQQ", "DIA", "MSFT", "NVDA", "SKHY", "OKLO", "LLY", "SCHD", "VGT", "BSX", "WDC", "CCJ"],
         "benchmarks": ["SPY", "QQQ"],
         "sectors": {},
         "holidays": [],
