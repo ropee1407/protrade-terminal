@@ -8,15 +8,12 @@
     "NVDA",
     "SKHY",
     "OKLO",
-    "SMR",
     "LLY",
     "SCHD",
     "VGT",
     "BSX",
     "WDC",
-    "DY",
     "CCJ",
-    "GRAB"
   ],
   "benchmarks": [
     "SPY",
@@ -31,15 +28,12 @@
     "NVDA": "Semiconductors",
     "SKHY": "Semiconductors",
     "OKLO": "Nuclear / Energy",
-    "SMR": "Nuclear / Energy",
     "LLY": "Healthcare",
     "SCHD": "Dividend ETF",
     "VGT": "Technology ETF",
     "BSX": "Healthcare",
     "WDC": "Semiconductors",
-    "DY": "Industrials",
     "CCJ": "Nuclear / Energy",
-    "GRAB": "Consumer / Mobility"
   },
   "holidays_year": 2026,
   "holidays": [
