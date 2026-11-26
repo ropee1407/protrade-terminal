@@ -1,8 +1,8 @@
 {
   "meta": {
     "asof": "2026-11-25",
-    "generated_at": "2026-11-26T10:51:07+07:00",
-    "version": "v4.2.2-Macro1-Micro4",
+    "generated_at": "2026-11-26T11:30:32+07:00",
+    "version": "v4.2.3-Macro1-Micro4",
     "prompt_version": "v4.2",
     "config_version": 1,
     "model": "gemini-3.8-flash",
