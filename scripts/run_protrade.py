@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ProTrade 6-in-1 Self-Evolving Quant System Runner
-v4.2.9: Fixed yfinance single-download Ticker hanging issue
+v4.2.10: Removed GRAB, AAPL, SMR (14 Tickers total), Batch Download Fix
 """
 
 import os
@@ -23,7 +23,7 @@ ET = ZoneInfo("America/New_York")
 BKK = ZoneInfo("Asia/Bangkok")
 DATA_DIR = "data"
 PROMPT_VERSION = "v4.2"
-SYSTEM_VERSION = "v4.2.9-Strict-NoHang-Batch"
+SYSTEM_VERSION = "v4.2.10-Strict-Batch-14Tickers"
 
 MAX_MACRO_CALLS = 1
 MAX_MICRO_CALLS = 4
@@ -230,7 +230,7 @@ def chunk_list(items, n_chunks):
     return [items[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n_chunks)]
 
 def main():
-    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] ProTrade Script Started (v4.2.9)")
+    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] ProTrade Script Started (v4.2.10)")
     force_run = os.getenv("FORCE_RUN", "false").lower() == "true"
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     primary_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
@@ -249,7 +249,8 @@ def main():
     models_chain = list(dict.fromkeys([primary_model] + fallback_models))
 
     watchlist_cfg = load_json(f"{DATA_DIR}/watchlist.json", {
-        "default": ["SPY", "QQQ", "DIA", "AAPL", "MSFT", "NVDA", "SKHY", "OKLO", "SMR", "LLY", "SCHD", "VGT", "BSX", "WDC", "DY", "CCJ", "GRAB"],
+        # เอา GRAB, AAPL, SMR ออกตามสั่ง เหลือ 14 ตัว
+        "default": ["SPY", "QQQ", "DIA", "MSFT", "NVDA", "SKHY", "OKLO", "LLY", "SCHD", "VGT", "BSX", "WDC", "DY", "CCJ"],
         "benchmarks": ["SPY", "QQQ"],
         "sectors": {},
         "holidays": [],
@@ -311,7 +312,6 @@ def main():
     print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] Starting Phase 1: Downloading data for {len(all_symbols)} symbols (Batch Download Mode)...")
 
     try:
-        # V4.2.9: โหลดหุ้นทั้งหมดรวดเดียวในคำสั่งเดียว เพื่อหลีกเลี่ยงบั๊ก Deadlock ของ yfinance
         all_data = yf.download(all_symbols, period="4mo", interval="1d", auto_adjust=False, progress=False, group_by='ticker', timeout=15)
         print(f"  -> Batch download completed.")
     except Exception as e:
@@ -322,7 +322,6 @@ def main():
     for sym in all_symbols:
         print(f"  -> Processing {sym}...", end="", flush=True)
         try:
-            # ดึงข้อมูลเฉพาะหุ้นตัวนั้นออกมาจาก Batch
             if len(all_symbols) == 1:
                 df = all_data.copy()
             else:
@@ -402,7 +401,6 @@ def main():
 
     valid_count = sum(1 for s in tickers_default if metrics_by_ticker.get(s, {}).get("status") == "ok")
     
-    # ห้ามข้ามถ้ามีหุ้นพัง! (Strict Requirement)
     if valid_count < len(tickers_default):
         critical_msg = f"CRITICAL ERROR: ประมวลผลหุ้นสำเร็จเพียง {valid_count}/{len(tickers_default)} ตัว ข้อมูลไม่ครบ บังคับหยุดระบบ"
         print(f"\n{critical_msg}")
@@ -495,7 +493,7 @@ def main():
         
         macro_sys = f"""
 คุณคือทีม 4 เอเจนต์ภาพรวม (Macro Sentinel, Lead Analyst, Critic และ Portfolio Risk Manager) (PROMPT_VERSION={PROMPT_VERSION}-Macro1)
-หน้าที่: สรุปภาพรวมเศรษฐกิจมหภาคสหรัฐฯ ณ วันที่ {expected_asof} และวิเคราะห์พอร์ต 17 ตัว{search_prompt_add}
+หน้าที่: สรุปภาพรวมเศรษฐกิจมหภาคสหรัฐฯ ณ วันที่ {expected_asof} และวิเคราะห์พอร์ต {len(tickers_default)} ตัว{search_prompt_add}
 
 ข้อจำกัด:
 - `macro_md`: ภาษาไทย ไม่เกิน 150 คำ แยกหัวข้อ **ข้อเท็จจริง** และ **การตีความ**
