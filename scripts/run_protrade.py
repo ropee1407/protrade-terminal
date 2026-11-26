@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
 ProTrade 6-in-1 Self-Evolving Quant System Runner (Phase 0 - Phase 6)
-M4 Architecture: 1 Macro + 4 Micro-Batches = 5 Requests/Day (15s Pacing <= 4 RPM + Auto-Fallback)
-Designed for GitHub Actions + GitHub Pages autonomous daily execution.
+v4.2.5: Macro 1 + Micro 4, Auto-Fallback, Search Grounding Toggle, Error Tracking
 """
 
 import os
-import re
 import sys
 import json
 import math
@@ -29,8 +27,10 @@ SYSTEM_VERSION = "v4.2.5-Macro1-Micro4"
 
 MAX_MACRO_CALLS = 1
 MAX_MICRO_CALLS = 4
-SLEEP_SECONDS = 15  # <= 4 RPM (safe under 5 RPM Free Tier limit)
+SLEEP_SECONDS = 15
 
+# Global dictionary to track unusable models for the current run
+unusable_models = {}
 
 def load_json(path, default=None):
     if not os.path.exists(path):
@@ -38,14 +38,12 @@ def load_json(path, default=None):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
 def save_json(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp_path = f"{path}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
     os.replace(tmp_path, path)
-
 
 def get_expected_asof(holidays):
     now_et = datetime.now(ET)
@@ -60,7 +58,6 @@ def get_expected_asof(holidays):
         check -= timedelta(days=1)
     return now_et.date().isoformat()
 
-
 def add_trading_days(start_str, n_days, holidays):
     cur = date.fromisoformat(start_str)
     added = 0
@@ -69,7 +66,6 @@ def add_trading_days(start_str, n_days, holidays):
         if cur.weekday() < 5 and cur.isoformat() not in holidays:
             added += 1
     return cur.isoformat()
-
 
 def count_trading_days_between(start_str, end_str, holidays):
     if not start_str or not end_str or start_str >= end_str:
@@ -83,7 +79,6 @@ def count_trading_days_between(start_str, end_str, holidays):
             cnt += 1
     return cnt
 
-
 def compute_wilder_rsi(close_series, period=14):
     delta = close_series.diff()
     gain = delta.clip(lower=0)
@@ -93,7 +88,6 @@ def compute_wilder_rsi(close_series, period=14):
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
     return float(rsi.iloc[-1]) if pd.notna(rsi.iloc[-1]) else None
-
 
 def compute_wilder_atr(df, period=14):
     high = df["High"]
@@ -106,7 +100,6 @@ def compute_wilder_atr(df, period=14):
     ], axis=1).max(axis=1)
     atr = tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
     return float(atr.iloc[-1]) if pd.notna(atr.iloc[-1]) else None
-
 
 def evaluate_decision_rule_j(item, prices_all, trading_days_sorted, neutral_band_mult):
     d_str = item["date"]
@@ -155,7 +148,6 @@ def evaluate_decision_rule_j(item, prices_all, trading_days_sorted, neutral_band
 
     return {"outcome": res, "outcome_close": round(final_close, 4), "outcome_date": t_str}
 
-
 def record_failure(lessons, phase, reason):
     now_iso = datetime.now(BKK).isoformat(timespec="seconds")
     failed = lessons.setdefault("failed_runs", [])
@@ -163,163 +155,88 @@ def record_failure(lessons, phase, reason):
     lessons["failed_runs"] = failed[-20:]
     save_json(f"{DATA_DIR}/lessons.json", lessons)
 
-
 def parse_json_response(resp_text):
-    """Parse model output as JSON. Tolerates code fences and prose around the JSON object."""
     txt = (resp_text or "").strip()
-    if not txt:
-        raise ValueError("empty response from model")
-    fence = re.match(r"^```[a-zA-Z]*\s*\n(.*?)\n?```\s*$", txt, re.S)
-    if fence:
-        txt = fence.group(1).strip()
-    try:
-        return json.loads(txt)
-    except json.JSONDecodeError:
-        start, end = txt.find("{"), txt.rfind("}")
-        if start != -1 and end > start:
-            return json.loads(txt[start:end + 1])
-        raise
+    if "{" in txt and "}" in txt:
+        start_idx = txt.find("{")
+        end_idx = txt.rfind("}") + 1
+        txt = txt[start_idx:end_idx]
+    return json.loads(txt)
 
-
-# --------------------------------------------------------------
-# Model fallback with per-run memory of unusable models
-# --------------------------------------------------------------
-MODEL_STATE = {}  # model -> {"strikes": int, "until": float(epoch seconds; inf = rest of run)}
-QUOTA_COOLDOWN_SECONDS = 120
-
-
-def _err_code(e):
-    code = getattr(e, "code", None)
-    if isinstance(code, int):
-        return code
-    m = re.match(r"\s*(\d{3})\b", str(e))
-    return int(m.group(1)) if m else None
-
-
-def _retry_delay(e):
-    s = str(e)
-    m = (re.search(r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s", s)
-         or re.search(r"retry in (\d+(?:\.\d+)?)\s*s", s, re.I))
-    return float(m.group(1)) if m else None
-
-
-def _is_blocked(model):
-    st = MODEL_STATE.get(model)
-    return bool(st) and time.time() < st["until"]
-
-
-def _block_model(model, seconds, reason):
-    """seconds=None -> blocked for the rest of the run. A second quota strike also blocks for the rest of the run."""
-    st = MODEL_STATE.setdefault(model, {"strikes": 0, "until": 0.0})
-    st["strikes"] += 1
-    permanent = seconds is None or st["strikes"] >= 2
-    st["until"] = float("inf") if permanent else time.time() + seconds
-    scope = "rest of this run" if permanent else f"{int(seconds)}s"
-    print(f"    [Skip] Model '{model}' unavailable ({reason}) -> skipped for {scope}.")
-
-
-SEARCH_STATE = {"enabled": os.getenv("USE_SEARCH", "true").strip().lower() != "false"}
-NO_SEARCH_NOTE = (
-    "\n\n[ข้อจำกัดของรอบนี้] ไม่มีการค้นหาเว็บในรอบนี้ ห้ามสร้างข่าว เหตุการณ์ หรือตัวเลขที่ไม่ได้อยู่ในข้อมูลที่ให้มา "
-    "ใช้เฉพาะข้อมูลราคา ตัวชี้วัด และกฎใน lessons เท่านั้น ช่อง catalyst ให้ระบุเฉพาะปัจจัยที่อนุมานได้จากข้อมูลที่ให้ "
-    "หรือเขียนว่า 'ไม่มีข้อมูลข่าวในรอบนี้'"
-)
-
-
-def _generate(client, mdl, contents, sys_instruction, use_search):
-    cfg = dict(
-        system_instruction=sys_instruction + ("" if use_search else NO_SEARCH_NOTE),
-        temperature=0.2,
-    )
-    if use_search:
-        cfg["tools"] = [{"google_search": {}}]
-    return client.models.generate_content(
-        model=mdl,
-        contents=contents,
-        config=types.GenerateContentConfig(**cfg),
-    )
-
-
-def call_gemini_with_fallback(client, models_chain, contents, sys_instruction):
-    """Try models in order. Skips models already known to be unusable, waits and retries once on
-    short rate limits / 5xx, remembers bad models and exhausted quota, and if a 429 is caused by
-    Google Search grounding itself, continues without search for the rest of the run."""
-    usable = [m for m in models_chain if not _is_blocked(m)]
-    if not usable:
-        raise RuntimeError(f"no usable model left in chain {models_chain} (all blocked this run)")
-
+def call_gemini_with_fallback(client, models_chain, contents, sys_instruction, allow_search=True):
+    """Calls Gemini with automatic model fallback and smart search toggling."""
     last_err = None
-    for idx, mdl in enumerate(usable):
-        tried_no_search = False
-        for attempt in (1, 2):
+    global unusable_models
+    
+    for idx, mdl in enumerate(models_chain):
+        if mdl in unusable_models:
+            print(f"    [Skip] Model '{mdl}' is marked unusable for this run: {unusable_models[mdl]}")
+            continue
+            
+        current_allow_search = allow_search
+        
+        while True:
             try:
-                resp = _generate(client, mdl, contents, sys_instruction, SEARCH_STATE["enabled"])
-                return parse_json_response(resp.text), mdl
+                tools = [{"google_search": {}}] if current_allow_search else None
+                resp = client.models.generate_content(
+                    model=mdl,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=sys_instruction,
+                        tools=tools,
+                        temperature=0.2,
+                    ),
+                )
+                parsed = parse_json_response(resp.text)
+                return parsed, mdl, current_allow_search
+                
             except Exception as e:
-                last_err = e
-                code = _err_code(e)
-                print(f"    [Fallback] Model '{mdl}' failed (attempt {attempt}, code={code}, search={SEARCH_STATE['enabled']}): {str(e)[:160]}")
-                if code == 429:
-                    delay = _retry_delay(e)
-                    if attempt == 1 and delay is not None and delay <= 60:
-                        time.sleep(delay + 1)  # short per-minute limit: wait, retry same model once
+                err_str = str(e)
+                print(f"    [Error] Model '{mdl}' (search={current_allow_search}) failed: {err_str[:120]}")
+                
+                if "429" in err_str:
+                    if current_allow_search:
+                        print(f"    [Fallback] Retrying '{mdl}' without search grounding...")
+                        current_allow_search = False
                         continue
-                    if SEARCH_STATE["enabled"] and not tried_no_search:
-                        # Is it the model's quota, or Google Search grounding being rejected? Test without search.
-                        # A 5xx during the test is a capacity problem (not quota), so retry it a couple of times.
-                        tried_no_search = True
-                        test_resp, test_code = None, None
-                        for t_try in (1, 2, 3):
-                            try:
-                                test_resp = _generate(client, mdl, contents, sys_instruction, False)
-                                break
-                            except Exception as e2:
-                                last_err, test_code = e2, _err_code(e2)
-                                print(f"    [Search-test] '{mdl}' without search -> code={test_code} (try {t_try}/3)")
-                                if test_code in (500, 502, 503, 504) and t_try < 3:
-                                    time.sleep(10)
-                                    continue
-                                break
-                        if test_resp is not None:
-                            SEARCH_STATE["enabled"] = False
-                            print(f"    [Search] Google Search grounding is rejected (429) but '{mdl}' works without it -> "
-                                  f"continuing WITHOUT Google Search for the rest of this run.")
-                            return parse_json_response(test_resp.text), mdl
-                        if test_code != 429:
-                            # Not a quota rejection (e.g. 503 overload): inconclusive, do not blame or block the model.
-                            print(f"    [Search-test] inconclusive for '{mdl}' (code={test_code}); not blocking it, trying next model.")
-                            break
-                        print(f"    [Search-test] '{mdl}' also 429 without search -> model quota/key issue, not grounding.")
-                    _block_model(mdl, QUOTA_COOLDOWN_SECONDS, "429 quota exhausted")
-                elif code in (500, 502, 503, 504):
-                    if attempt == 1:
-                        time.sleep(10)  # transient overload: retry same model once
-                        continue
-                elif code in (400, 403, 404):
-                    _block_model(mdl, None, f"HTTP {code}")
-                break  # parse errors / other errors: go to next model
-        if idx < len(usable) - 1:
-            time.sleep(3)
+                    else:
+                        print(f"    [Fallback] Model '{mdl}' hit 429 even without search. Marking unusable.")
+                        unusable_models[mdl] = "429_exhausted"
+                        last_err = e
+                        time.sleep(3)
+                        break
+                        
+                elif "404" in err_str or "400" in err_str or "403" in err_str:
+                    print(f"    [Fallback] Model '{mdl}' invalid or access denied. Marking unusable.")
+                    unusable_models[mdl] = "invalid_or_denied"
+                    last_err = e
+                    break
+                    
+                elif "503" in err_str:
+                    print(f"    [Retry] Model '{mdl}' overloaded (503). Not blocking model, trying next.")
+                    last_err = e
+                    time.sleep(3)
+                    break
+                    
+                else:
+                    last_err = e
+                    break
+                    
     raise last_err
 
-
 def chunk_list(items, n_chunks):
-    """Splits a list into up to n_chunks roughly equal batches."""
     if not items:
         return []
     n_chunks = max(1, min(n_chunks, len(items)))
     k, m = divmod(len(items), n_chunks)
     return [items[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n_chunks)]
 
-
 def main():
     force_run = os.getenv("FORCE_RUN", "false").lower() == "true"
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    
-    # 1. รับค่าโมเดลหลัก
     primary_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+    use_search_env = os.getenv("USE_SEARCH", "false").lower() == "true"
     
-    # 2. รับค่าโมเดลสำรองแบบไดนามิกจาก Workflow
     fallback_env = os.getenv("GEMINI_FALLBACK_MODELS", "").strip()
     if fallback_env:
         fallback_models = [m.strip() for m in fallback_env.split(",") if m.strip()]
@@ -365,7 +282,6 @@ def main():
     expected_asof = get_expected_asof(holidays)
     now_bkk_iso = datetime.now(BKK).isoformat(timespec="seconds")
 
-    # Phase 0: Preflight
     if not force_run and heartbeat.get("last_ok_asof") == expected_asof and heartbeat.get("status") == "ok":
         heartbeat["last_checked"] = now_bkk_iso
         heartbeat["expected_asof"] = expected_asof
@@ -381,7 +297,6 @@ def main():
         save_json(f"{DATA_DIR}/heartbeat.json", heartbeat)
         sys.exit(1)
 
-    # Phase 1: Price Data & Technical Indicators
     tickers_default = watchlist_cfg.get("default", [])
     benchmarks = watchlist_cfg.get("benchmarks", ["SPY", "QQQ"])
     all_symbols = list(dict.fromkeys(tickers_default + benchmarks))
@@ -489,7 +404,6 @@ def main():
 
     trading_days_sorted = sorted(prices_all.keys())
 
-    # Phase 3.1: Evaluate past calls
     ym_cur = expected_asof[:7]
     prev_month_dt = date.fromisoformat(expected_asof).replace(day=1) - timedelta(days=1)
     ym_prev = prev_month_dt.strftime("%Y-%m")
@@ -525,16 +439,15 @@ def main():
     macro_calls_used = 0
     micro_calls_used = 0
     models_used = []
-
-    # ==============================================================
-    # PHASE 2: SINGLE MACRO CALL (Macro 1/1)
-    # ==============================================================
-    print(f"[M4] Running Macro Phase ({MAX_MACRO_CALLS} Request, Fallback Chain={models_chain})...")
+    search_used_in_macro = False
+    
+    print(f"[M4] Running Macro Phase ({MAX_MACRO_CALLS} Request, Fallback Chain={models_chain}, Initial Search={use_search_env})...")
     macro_out = {
         "macro_md": prev_rev.get("macro_md", "ไม่มีข้อมูล"),
         "analyst_md": prev_rev.get("analyst_md", "ไม่มีข้อมูล"),
         "critic_md": prev_rev.get("critic_md", "ไม่มีข้อมูล"),
         "risk_md": prev_rev.get("risk_md", "ไม่มีข้อมูล"),
+        "search_grounding": False
     }
 
     try:
@@ -563,15 +476,18 @@ def main():
             "yesterday_summary": yesterday_summary,
             "active_rules": active_rules,
         }
+        
+        search_prompt_add = " ห้ามอ้างอิงข่าวถ้าไม่มีข้อมูลชัดเจน ให้วิเคราะห์จากตัวเลขราคาและ Sector แทน" if not use_search_env else ""
+        
         macro_sys = f"""
 คุณคือทีม 4 เอเจนต์ภาพรวม (Macro Sentinel, Lead Analyst, Critic และ Portfolio Risk Manager) (PROMPT_VERSION={PROMPT_VERSION}-Macro1)
-หน้าที่: ค้นหาข่าวเศรษฐกิจมหภาคสหรัฐฯ ณ วันที่ {expected_asof} (ดอกเบี้ย Fed, บอนด์ยีลด์ 10Y, เงินเฟ้อ, ดัชนี SPY/QQQ) และสรุปภาพรวมทั้งพอร์ต 17 ตัวในคำตอบเดียว
+หน้าที่: สรุปภาพรวมเศรษฐกิจมหภาคสหรัฐฯ ณ วันที่ {expected_asof} และวิเคราะห์พอร์ต 17 ตัว{search_prompt_add}
 
 ข้อจำกัด:
-- `macro_md`: ภาษาไทย ไม่เกิน 150 คำ แยกหัวข้อ **ข้อเท็จจริง** และ **การตีความ** พร้อมอ้างอิงข่าวจริง
+- `macro_md`: ภาษาไทย ไม่เกิน 150 คำ แยกหัวข้อ **ข้อเท็จจริง** และ **การตีความ**
 - `analyst_md`: ภาษาไทย ไม่เกิน 100 คำ สรุปธีมการถกเถียงภาพรวมระหว่างฝั่ง Bull และ Skeptic วันนี้
 - `critic_md`: ภาษาไทย ไม่เกิน 100 คำ สรุปผลตัดสินวันนี้ (hit/miss/n/a) จุดบอด และการบังคับใช้กฎ `[R...]`
-- `risk_md`: ภาษาไทย ไม่เกิน 120 คำ วิเคราะห์ความเสี่ยงกระจุกตัวรายเซกเตอร์ (Semiconductors, Nuclear/Energy, Tech) เทียบกับ SPY/QQQ
+- `risk_md`: ภาษาไทย ไม่เกิน 120 คำ วิเคราะห์ความเสี่ยงกระจุกตัวรายเซกเตอร์
 
 ตอบเป็น JSON ล้วน:
 {{
@@ -581,25 +497,25 @@ def main():
   "risk_md": "..."
 }}
 """
-        m_json, used_mdl = call_gemini_with_fallback(
+        m_json, used_mdl, final_search_state = call_gemini_with_fallback(
             client,
             models_chain,
             json.dumps(macro_payload, ensure_ascii=False),
             macro_sys,
+            allow_search=use_search_env
         )
         for k in ("macro_md", "analyst_md", "critic_md", "risk_md"):
             if m_json.get(k):
                 macro_out[k] = m_json[k]
+        macro_out["search_grounding"] = final_search_state
+        search_used_in_macro = final_search_state
         macro_calls_used = 1
         models_used.append(used_mdl)
-        print(f"  [Macro 1/1] Completed using model '{used_mdl}'.")
+        print(f"  [Macro 1/1] Completed using model '{used_mdl}', search_grounding={final_search_state}.")
     except Exception as e:
         print(f"  [Warning] Macro 1/1 failed across all models: {e}")
         meta_status = "partial"
 
-    # ==============================================================
-    # PHASE 3: 4 MICRO-BATCHES (Micro 1..4 covering all 17 tickers)
-    # ==============================================================
     final_tickers = {}
     new_history_entries = []
     has_missing = False
@@ -648,9 +564,12 @@ def main():
                 "tickers": batch_metrics,
                 "active_rules": active_rules,
             }
+            
+            micro_search_prompt_add = " ห้ามค้นหาข่าวใหม่ หากไม่มีข้อมูลให้วิเคราะห์ด้วย Technical และ Sector จากข้อมูลที่ส่งให้เท่านั้น" if not search_used_in_macro else " ใช้ Google Search ค้นหาข่าวล่าสุดเฉพาะเจาะจงของหุ้นแต่ละตัวประกอบการตัดสินใจ"
+            
             micro_sys = f"""
 คุณคือ Quant Analyst (Bull vs Skeptic) วิเคราะห์หุ้นชุด {batch_syms} ณ วันที่ {expected_asof} (PROMPT_VERSION={PROMPT_VERSION}-MicroBatch{b_idx})
-หน้าที่: ใช้ Google Search ค้นหาข่าว/ตัวเร่ง (Catalyst) ล่าสุดของหุ้นทุกตัวในกลุ่ม {batch_syms} แล้ววิเคราะห์เจาะจงรายตัว
+หน้าที่:{micro_search_prompt_add}
 
 กฎเหล็ก:
 1. ห้ามเดาตัวเลข levels เอง ให้ใช้ค่าจาก tickers[SYM] เท่านั้น:
@@ -666,21 +585,22 @@ def main():
     "horizon": "3d",
     "reasons": ["(Bull) ...", "(Skeptic) ..."],
     "risks": ["(Skeptic) ...", "(Bull) ..."],
-    "catalyst": "ข่าวหรือปัจจัยเร่งเฉพาะเจาะจงของหุ้น...",
+    "catalyst": "ปัจจัยเร่ง...",
     "long_term": {{"view": "...", "zone": "..."}}
   }}
 }}
 """
-            batch_ai, used_mdl = call_gemini_with_fallback(
+            batch_ai, used_mdl, final_batch_search = call_gemini_with_fallback(
                 client,
                 models_chain,
                 json.dumps(micro_payload, ensure_ascii=False),
                 micro_sys,
+                allow_search=search_used_in_macro
             )
             micro_calls_used += 1
             if used_mdl not in models_used:
                 models_used.append(used_mdl)
-            print(f"    -> Batch {b_idx}/{len(batches)} succeeded via '{used_mdl}'.")
+            print(f"    -> Batch {b_idx}/{len(batches)} succeeded via '{used_mdl}', search={final_batch_search}.")
 
             for sym in batch_syms:
                 m = metrics_by_ticker[sym]
@@ -731,6 +651,7 @@ def main():
                     "risks": risks,
                     "catalyst": t_ai.get("catalyst", "ไม่มีข้อมูล"),
                     "long_term": t_ai.get("long_term", {"view": "ไม่มีข้อมูล", "zone": "ไม่มีข้อมูล"}),
+                    "search_grounding": final_batch_search,
                     "yesterday": yesterday_summary.get(sym, {"call": "", "result": "n/a", "note": "ไม่มีรายการครบกำหนด"}),
                 }
 
@@ -769,7 +690,6 @@ def main():
 
     ordered_final_tickers = {sym: final_tickers[sym] for sym in tickers_default if sym in final_tickers}
 
-    # PHASE 6: Save & Commit
     for ym, p_data in monthly_price_updates.items():
         save_json(f"{DATA_DIR}/prices/prices_{ym}.json", p_data)
 
@@ -801,7 +721,6 @@ def main():
             "prompt_version": PROMPT_VERSION,
             "config_version": config.get("config_version", 1),
             "model": active_model_label,
-            "search_grounding": SEARCH_STATE["enabled"],
             "api_calls": {
                 "macro": macro_calls_used,
                 "max_macro": MAX_MACRO_CALLS,
@@ -820,11 +739,10 @@ def main():
         "expected_asof": expected_asof,
         "last_ok_asof": expected_asof if meta_status != "failed" else heartbeat.get("last_ok_asof"),
         "status": meta_status,
-        "note": f"Macro {macro_calls_used}/{MAX_MACRO_CALLS} + Micro {micro_calls_used}/{MAX_MICRO_CALLS} ({len(ordered_final_tickers)} tickers, models={active_model_label}, search={'on' if SEARCH_STATE['enabled'] else 'off'})",
+        "note": f"Macro {macro_calls_used}/{MAX_MACRO_CALLS} + Micro {micro_calls_used}/{MAX_MICRO_CALLS} ({len(ordered_final_tickers)} tickers, models={active_model_label})",
     })
     save_json(f"{DATA_DIR}/heartbeat.json", heartbeat)
     print(f"[Success] ProTrade run completed for {expected_asof} (Macro={macro_calls_used}/{MAX_MACRO_CALLS}, Micro={micro_calls_used}/{MAX_MICRO_CALLS}, status={meta_status}).")
-
 
 if __name__ == "__main__":
     try:
