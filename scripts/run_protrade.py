@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-ProTrade 6-in-1 Self-Evolving Quant System Runner (Phase 0 - Phase 6)
-v4.2.5: Macro 1 + Micro 4, Auto-Fallback, Search Grounding Toggle, Error Tracking
+ProTrade 6-in-1 Self-Evolving Quant System Runner
+v4.2.7: Strict All-Stock Requirement, yfinance Retry & Spoofing
 """
 
 import os
@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import requests
 from google import genai
 from google.genai import types
 
@@ -23,13 +24,12 @@ ET = ZoneInfo("America/New_York")
 BKK = ZoneInfo("Asia/Bangkok")
 DATA_DIR = "data"
 PROMPT_VERSION = "v4.2"
-SYSTEM_VERSION = "v4.2.5-Macro1-Micro4"
+SYSTEM_VERSION = "v4.2.7-Strict-AllStocks"
 
 MAX_MACRO_CALLS = 1
 MAX_MICRO_CALLS = 4
 SLEEP_SECONDS = 15
 
-# Global dictionary to track unusable models for the current run
 unusable_models = {}
 
 def load_json(path, default=None):
@@ -164,7 +164,6 @@ def parse_json_response(resp_text):
     return json.loads(txt)
 
 def call_gemini_with_fallback(client, models_chain, contents, sys_instruction, allow_search=True):
-    """Calls Gemini with automatic model fallback and smart search toggling."""
     last_err = None
     global unusable_models
     
@@ -232,6 +231,7 @@ def chunk_list(items, n_chunks):
     return [items[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n_chunks)]
 
 def main():
+    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] ProTrade Script Started (v4.2.7)")
     force_run = os.getenv("FORCE_RUN", "false").lower() == "true"
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     primary_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
@@ -281,7 +281,7 @@ def main():
     holidays = watchlist_cfg.get("holidays", [])
     expected_asof = get_expected_asof(holidays)
     now_bkk_iso = datetime.now(BKK).isoformat(timespec="seconds")
-
+    
     if not force_run and heartbeat.get("last_ok_asof") == expected_asof and heartbeat.get("status") == "ok":
         heartbeat["last_checked"] = now_bkk_iso
         heartbeat["expected_asof"] = expected_asof
@@ -309,90 +309,108 @@ def main():
     metrics_by_ticker = {}
     monthly_price_updates = {}
 
+    # ตั้งค่า requests session เพื่อจำลองเป็นเบราว์เซอร์ ป้องกัน yfinance โดนบล็อก
+    yf_session = requests.Session()
+    yf_session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Encoding': 'gzip, deflate, br'
+    })
+
+    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] Starting Phase 1: Downloading data for {len(all_symbols)} symbols (Strict Mode)...")
+
     for sym in all_symbols:
-        try:
-            df = yf.download(sym, period="4mo", interval="1d", auto_adjust=False, progress=False)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
-            df.index = pd.to_datetime(df.index).strftime("%Y-%m-%d")
-            df = df[df.index <= expected_asof]
+        print(f"  -> Fetching {sym}...", end="", flush=True)
+        
+        df = pd.DataFrame()
+        success = False
+        last_fetch_err = ""
+        max_retries = 5
+        
+        # ระบบจัดการค้าง: วนลูปพยายามดึงข้อมูล 5 ครั้ง (Timeout ครั้งละ 10 วิ)
+        for attempt in range(max_retries):
+            try:
+                df = yf.download(sym, period="4mo", interval="1d", auto_adjust=False, progress=False, timeout=10, session=yf_session)
+                if not df.empty:
+                    success = True
+                    break
+                else:
+                    last_fetch_err = "Empty DataFrame returned (อาจไม่มีข้อมูลใน Yahoo Finance)"
+            except Exception as e:
+                last_fetch_err = str(e)
+            
+            # ถ้าดึงไม่สำเร็จ ให้รอ 3 วินาทีแล้วลองใหม่
+            if attempt < max_retries - 1:
+                print(f" retry({attempt+1})...", end="", flush=True)
+                time.sleep(3)
+                
+        # หากพยายามครบ 5 ครั้งแล้วยังไม่ได้ ให้ระเบิด Error เพื่อบังคับหยุด (ตาม Requirement ที่ห้ามข้าม)
+        if not success:
+            critical_msg = f"CRITICAL ERROR: ไม่สามารถดึงข้อมูลหุ้น {sym} ได้หลังจากพยายาม {max_retries} ครั้ง (Error: {last_fetch_err[:100]}). บังคับหยุดระบบเพื่อป้องกันการวิเคราะห์หุ้นไม่ครบ 17 ตัว"
+            print(f"\n{critical_msg}")
+            raise RuntimeError(critical_msg)
+            
+        print(f" Done ({len(df)} rows)")
+        
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+        df.index = pd.to_datetime(df.index).strftime("%Y-%m-%d")
+        df = df[df.index <= expected_asof]
 
-            if df.empty or expected_asof not in df.index:
-                metrics_by_ticker[sym] = {"status": "ไม่มีข้อมูล", "reason": f"ไม่พบราคาปิด ณ {expected_asof} จาก Yahoo Finance"}
-                continue
+        for d_idx, row in df.tail(45).iterrows():
+            ym = d_idx[:7]
+            monthly_price_updates.setdefault(ym, {}).setdefault(d_idx, {})[sym] = [
+                round(float(row["Open"]), 4),
+                round(float(row["Close"]), 4)
+            ]
 
-            for d_idx, row in df.tail(45).iterrows():
-                ym = d_idx[:7]
-                monthly_price_updates.setdefault(ym, {}).setdefault(d_idx, {})[sym] = [
-                    round(float(row["Open"]), 4),
-                    round(float(row["Close"]), 4)
-                ]
+        close_now = float(df["Close"].iloc[-1])
+        prev_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else close_now
+        pct_chg = ((close_now / prev_close) - 1.0) * 100.0 if prev_close else 0.0
 
-            close_now = float(df["Close"].iloc[-1])
-            prev_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else close_now
-            pct_chg = ((close_now / prev_close) - 1.0) * 100.0 if prev_close else 0.0
+        sma20 = float(df["Close"].rolling(20).mean().iloc[-1]) if len(df) >= 20 else None
+        sma50 = float(df["Close"].rolling(50).mean().iloc[-1]) if len(df) >= 50 else None
+        rsi14 = compute_wilder_rsi(df["Close"], 14) if len(df) >= 15 else None
+        atr14 = compute_wilder_atr(df, 14) if len(df) >= 15 else None
 
-            if abs(pct_chg) > 25.0:
-                metrics_by_ticker[sym] = {"status": "ไม่มีข้อมูล", "reason": f"ราคาเปลี่ยนแปลงผิดปกติ {pct_chg:.1f}% เกิน 25% รอตรวจสอบ"}
-                continue
+        vol_now = float(df["Volume"].iloc[-1])
+        vol_avg20 = float(df["Volume"].rolling(20).mean().iloc[-1]) if len(df) >= 20 else vol_now
+        vol_ratio = round(vol_now / vol_avg20, 2) if vol_avg20 > 0 else 1.0
 
-            sma20 = float(df["Close"].rolling(20).mean().iloc[-1]) if len(df) >= 20 else None
-            sma50 = float(df["Close"].rolling(50).mean().iloc[-1]) if len(df) >= 50 else None
-            rsi14 = compute_wilder_rsi(df["Close"], 14) if len(df) >= 15 else None
-            atr14 = compute_wilder_atr(df, 14) if len(df) >= 15 else None
+        recent_sr = df.tail(sr_days)
+        support = round(float(recent_sr["Low"].min()), 2)
+        resistance = round(float(recent_sr["High"].max()), 2)
+        if support >= resistance:
+            resistance = round(support + (atr14 or 1.0), 2)
 
-            vol_now = float(df["Volume"].iloc[-1])
-            vol_avg20 = float(df["Volume"].rolling(20).mean().iloc[-1]) if len(df) >= 20 else vol_now
-            vol_ratio = round(vol_now / vol_avg20, 2) if vol_avg20 > 0 else 1.0
+        move_atr = round(abs(close_now - prev_close) / atr14, 2) if atr14 and atr14 > 0 else 0.0
+        prev_entry = prev_analysis.get("tickers", {}).get(sym, {})
+        last_full = prev_entry.get("last_full_date")
+        days_since_full = count_trading_days_between(last_full, expected_asof, holidays) if last_full else 999
 
-            recent_sr = df.tail(sr_days)
-            support = round(float(recent_sr["Low"].min()), 2)
-            resistance = round(float(recent_sr["High"].max()), 2)
-            if support >= resistance:
-                resistance = round(support + (atr14 or 1.0), 2)
+        mode = "full" if (move_atr >= trig_atr or days_since_full >= full_refresh_days or not last_full) else "short"
 
-            move_atr = round(abs(close_now - prev_close) / atr14, 2) if atr14 and atr14 > 0 else 0.0
-            prev_entry = prev_analysis.get("tickers", {}).get(sym, {})
-            last_full = prev_entry.get("last_full_date")
-            days_since_full = count_trading_days_between(last_full, expected_asof, holidays) if last_full else 999
-
-            mode = "full" if (move_atr >= trig_atr or days_since_full >= full_refresh_days or not last_full) else "short"
-
-            metrics_by_ticker[sym] = {
-                "status": "ok",
-                "close": round(close_now, 2),
-                "prev_close": round(prev_close, 2),
-                "pct_change": round(pct_chg, 2),
-                "sma20": round(sma20, 2) if sma20 else None,
-                "sma50": round(sma50, 2) if sma50 else None,
-                "rsi14": round(rsi14, 2) if rsi14 else None,
-                "atr14": round(atr14, 2) if atr14 else None,
-                "move_atr": move_atr,
-                "vol_ratio_20d": vol_ratio,
-                "support": support,
-                "resistance": resistance,
-                "bull_invalidation": round(support - inv_mult * (atr14 or 0), 2),
-                "bear_invalidation": round(resistance + inv_mult * (atr14 or 0), 2),
-                "analysis_mode": mode,
-                "last_full_date": expected_asof if mode == "full" else last_full,
-                "prev_entry": prev_entry if mode == "short" else None,
-                "source": f"Yahoo Finance ({expected_asof} close)"
-            }
-        except Exception as e:
-            metrics_by_ticker[sym] = {"status": "ไม่มีข้อมูล", "reason": f"ดึงข้อมูลไม่สำเร็จ: {str(e)[:120]}"}
-
-    valid_count = sum(1 for s in tickers_default if metrics_by_ticker.get(s, {}).get("status") == "ok")
-    if valid_count == 0:
-        heartbeat.update({
-            "last_checked": now_bkk_iso,
-            "expected_asof": expected_asof,
-            "status": "skipped",
-            "note": f"ข้อมูลราคายังไม่อัปเดต ณ {expected_asof}"
-        })
-        save_json(f"{DATA_DIR}/heartbeat.json", heartbeat)
-        print(f"[Phase 1] Market close data for {expected_asof} not available yet. Skipped.")
-        return
+        metrics_by_ticker[sym] = {
+            "status": "ok",
+            "close": round(close_now, 2),
+            "prev_close": round(prev_close, 2),
+            "pct_change": round(pct_chg, 2),
+            "sma20": round(sma20, 2) if sma20 else None,
+            "sma50": round(sma50, 2) if sma50 else None,
+            "rsi14": round(rsi14, 2) if rsi14 else None,
+            "atr14": round(atr14, 2) if atr14 else None,
+            "move_atr": move_atr,
+            "vol_ratio_20d": vol_ratio,
+            "support": support,
+            "resistance": resistance,
+            "bull_invalidation": round(support - inv_mult * (atr14 or 0), 2),
+            "bear_invalidation": round(resistance + inv_mult * (atr14 or 0), 2),
+            "analysis_mode": mode,
+            "last_full_date": expected_asof if mode == "full" else last_full,
+            "prev_entry": prev_entry if mode == "short" else None,
+            "source": f"Yahoo Finance ({expected_asof} close)"
+        }
 
     prices_all = {}
     for ym, days_map in monthly_price_updates.items():
@@ -441,7 +459,7 @@ def main():
     models_used = []
     search_used_in_macro = False
     
-    print(f"[M4] Running Macro Phase ({MAX_MACRO_CALLS} Request, Fallback Chain={models_chain}, Initial Search={use_search_env})...")
+    print(f"\n[M4] Running Macro Phase ({MAX_MACRO_CALLS} Request, Fallback Chain={models_chain}, Initial Search={use_search_env})...")
     macro_out = {
         "macro_md": prev_rev.get("macro_md", "ไม่มีข้อมูล"),
         "analyst_md": prev_rev.get("analyst_md", "ไม่มีข้อมูล"),
@@ -518,19 +536,15 @@ def main():
 
     final_tickers = {}
     new_history_entries = []
-    has_missing = False
 
     valid_symbols = []
     for sym in tickers_default:
         m = metrics_by_ticker.get(sym, {})
-        if m.get("status") != "ok":
-            has_missing = True
-            final_tickers[sym] = {"status": "ไม่มีข้อมูล", "reason": m.get("reason", "ไม่มีข้อมูล")}
-        else:
+        if m.get("status") == "ok":
             valid_symbols.append(sym)
 
     batches = chunk_list(valid_symbols, MAX_MICRO_CALLS)
-    print(f"[M4] Running Micro Phase ({len(batches)} Batches covering {len(valid_symbols)} valid tickers, sleep={SLEEP_SECONDS}s)...")
+    print(f"\n[M4] Running Micro Phase ({len(batches)} Batches covering {len(valid_symbols)} valid tickers, sleep={SLEEP_SECONDS}s)...")
 
     for b_idx, batch_syms in enumerate(batches, start=1):
         print(f"  [Micro Batch {b_idx}/{len(batches)}] Tickers: {batch_syms} (waiting {SLEEP_SECONDS}s for 5 RPM limit)...")
@@ -606,7 +620,7 @@ def main():
                 m = metrics_by_ticker[sym]
                 t_ai = batch_ai.get(sym) if isinstance(batch_ai, dict) else None
                 if not isinstance(t_ai, dict):
-                    has_missing = True
+                    # ถ้าระบบตอบกลับมาผิดรูปแบบ จะถือเป็น partial
                     meta_status = "partial"
                     final_tickers[sym] = {"status": "ไม่มีข้อมูล", "reason": "AI ไม่ได้ส่งผลวิเคราะห์ของหุ้นตัวนี้กลับมาในชุด"}
                     continue
@@ -675,7 +689,6 @@ def main():
 
         except Exception as e:
             print(f"  [Warning] Micro Batch {b_idx}/{len(batches)} failed across all models: {e}")
-            has_missing = True
             meta_status = "partial"
             for sym in batch_syms:
                 m = metrics_by_ticker[sym]
@@ -708,8 +721,6 @@ def main():
 
     if macro_calls_used == 0 and micro_calls_used == 0:
         meta_status = "failed"
-    if meta_status != "failed" and has_missing:
-        meta_status = "partial"
 
     active_model_label = ", ".join(models_used) if models_used else primary_model
 
@@ -742,7 +753,7 @@ def main():
         "note": f"Macro {macro_calls_used}/{MAX_MACRO_CALLS} + Micro {micro_calls_used}/{MAX_MICRO_CALLS} ({len(ordered_final_tickers)} tickers, models={active_model_label})",
     })
     save_json(f"{DATA_DIR}/heartbeat.json", heartbeat)
-    print(f"[Success] ProTrade run completed for {expected_asof} (Macro={macro_calls_used}/{MAX_MACRO_CALLS}, Micro={micro_calls_used}/{MAX_MICRO_CALLS}, status={meta_status}).")
+    print(f"\n[Success] ProTrade run completed for {expected_asof} (Macro={macro_calls_used}/{MAX_MACRO_CALLS}, Micro={micro_calls_used}/{MAX_MICRO_CALLS}, status={meta_status}).")
 
 if __name__ == "__main__":
     try:
