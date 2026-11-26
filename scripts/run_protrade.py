@@ -6,6 +6,7 @@ Designed for GitHub Actions + GitHub Pages autonomous daily execution.
 """
 
 import os
+import re
 import sys
 import json
 import math
@@ -24,7 +25,7 @@ ET = ZoneInfo("America/New_York")
 BKK = ZoneInfo("Asia/Bangkok")
 DATA_DIR = "data"
 PROMPT_VERSION = "v4.2"
-SYSTEM_VERSION = "v4.2.2-Macro1-Micro4"
+SYSTEM_VERSION = "v4.2.3-Macro1-Micro4"
 
 MAX_MACRO_CALLS = 1
 MAX_MICRO_CALLS = 4
@@ -164,33 +165,100 @@ def record_failure(lessons, phase, reason):
 
 
 def parse_json_response(resp_text):
+    """Parse model output as JSON. Tolerates code fences and prose around the JSON object."""
     txt = (resp_text or "").strip()
-    if txt.startswith("```"):
-        txt = txt.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    return json.loads(txt)
+    if not txt:
+        raise ValueError("empty response from model")
+    fence = re.match(r"^```[a-zA-Z]*\s*\n(.*?)\n?```\s*$", txt, re.S)
+    if fence:
+        txt = fence.group(1).strip()
+    try:
+        return json.loads(txt)
+    except json.JSONDecodeError:
+        start, end = txt.find("{"), txt.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(txt[start:end + 1])
+        raise
+
+
+# --------------------------------------------------------------
+# Model fallback with per-run memory of unusable models
+# --------------------------------------------------------------
+MODEL_STATE = {}  # model -> {"strikes": int, "until": float(epoch seconds; inf = rest of run)}
+QUOTA_COOLDOWN_SECONDS = 120
+
+
+def _err_code(e):
+    code = getattr(e, "code", None)
+    if isinstance(code, int):
+        return code
+    m = re.match(r"\s*(\d{3})\b", str(e))
+    return int(m.group(1)) if m else None
+
+
+def _retry_delay(e):
+    s = str(e)
+    m = (re.search(r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s", s)
+         or re.search(r"retry in (\d+(?:\.\d+)?)\s*s", s, re.I))
+    return float(m.group(1)) if m else None
+
+
+def _is_blocked(model):
+    st = MODEL_STATE.get(model)
+    return bool(st) and time.time() < st["until"]
+
+
+def _block_model(model, seconds, reason):
+    """seconds=None -> blocked for the rest of the run. A second quota strike also blocks for the rest of the run."""
+    st = MODEL_STATE.setdefault(model, {"strikes": 0, "until": 0.0})
+    st["strikes"] += 1
+    permanent = seconds is None or st["strikes"] >= 2
+    st["until"] = float("inf") if permanent else time.time() + seconds
+    scope = "rest of this run" if permanent else f"{int(seconds)}s"
+    print(f"    [Skip] Model '{model}' unavailable ({reason}) -> skipped for {scope}.")
 
 
 def call_gemini_with_fallback(client, models_chain, contents, sys_instruction):
-    """Calls Gemini with automatic model fallback on 429 / quota / model errors."""
+    """Try models in order. Skips models already known to be unusable, waits and retries once on
+    short rate limits / 5xx, and remembers 404/400/403 (bad model) and exhausted quota."""
+    usable = [m for m in models_chain if not _is_blocked(m)]
+    if not usable:
+        raise RuntimeError(f"no usable model left in chain {models_chain} (all blocked this run)")
+
     last_err = None
-    for idx, mdl in enumerate(models_chain):
-        try:
-            resp = client.models.generate_content(
-                model=mdl,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=sys_instruction,
-                    tools=[{"google_search": {}}],
-                    temperature=0.2,
-                ),
-            )
-            parsed = parse_json_response(resp.text)
-            return parsed, mdl
-        except Exception as e:
-            last_err = e
-            print(f"    [Fallback] Model '{mdl}' failed ({str(e)[:120]})")
-            if idx < len(models_chain) - 1:
-                time.sleep(3)
+    for idx, mdl in enumerate(usable):
+        for attempt in (1, 2):
+            try:
+                resp = client.models.generate_content(
+                    model=mdl,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=sys_instruction,
+                        tools=[{"google_search": {}}],
+                        temperature=0.2,
+                    ),
+                )
+                parsed = parse_json_response(resp.text)
+                return parsed, mdl
+            except Exception as e:
+                last_err = e
+                code = _err_code(e)
+                print(f"    [Fallback] Model '{mdl}' failed (attempt {attempt}, code={code}): {str(e)[:160]}")
+                if code == 429:
+                    delay = _retry_delay(e)
+                    if attempt == 1 and delay is not None and delay <= 60:
+                        time.sleep(delay + 1)  # short per-minute limit: wait, retry same model once
+                        continue
+                    _block_model(mdl, QUOTA_COOLDOWN_SECONDS, "429 quota exhausted")
+                elif code in (500, 502, 503, 504):
+                    if attempt == 1:
+                        time.sleep(10)  # transient overload: retry same model once
+                        continue
+                elif code in (400, 403, 404):
+                    _block_model(mdl, None, f"HTTP {code}")
+                break  # parse errors / other errors: go to next model
+        if idx < len(usable) - 1:
+            time.sleep(3)
     raise last_err
 
 
