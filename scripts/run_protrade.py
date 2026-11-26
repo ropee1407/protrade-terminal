@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ProTrade 6-in-1 Self-Evolving Quant System Runner
-v4.2.10: Removed GRAB, AAPL, SMR (14 Tickers total), Batch Download Fix
+v4.2.11: Added Retry Logic for Individual Tickers if Batch Download Fails
 """
 
 import os
@@ -23,7 +23,7 @@ ET = ZoneInfo("America/New_York")
 BKK = ZoneInfo("Asia/Bangkok")
 DATA_DIR = "data"
 PROMPT_VERSION = "v4.2"
-SYSTEM_VERSION = "v4.2.10-Strict-Batch-14Tickers"
+SYSTEM_VERSION = "v4.2.11-Strict-BatchWithRetry"
 
 MAX_MACRO_CALLS = 1
 MAX_MICRO_CALLS = 4
@@ -230,7 +230,7 @@ def chunk_list(items, n_chunks):
     return [items[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n_chunks)]
 
 def main():
-    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] ProTrade Script Started (v4.2.10)")
+    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] ProTrade Script Started (v4.2.11)")
     force_run = os.getenv("FORCE_RUN", "false").lower() == "true"
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     primary_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
@@ -249,8 +249,7 @@ def main():
     models_chain = list(dict.fromkeys([primary_model] + fallback_models))
 
     watchlist_cfg = load_json(f"{DATA_DIR}/watchlist.json", {
-        # เอา GRAB, AAPL, SMR ออกตามสั่ง เหลือ 14 ตัว
-        "default": ["SPY", "QQQ", "DIA", "MSFT", "NVDA", "SKHY", "OKLO", "LLY", "SCHD", "VGT", "BSX", "WDC", "CCJ"],
+        "default": ["SPY", "QQQ", "DIA", "MSFT", "NVDA", "SKHY", "OKLO", "LLY", "SCHD", "VGT", "BSX", "WDC", "DY", "CCJ"],
         "benchmarks": ["SPY", "QQQ"],
         "sectors": {},
         "holidays": [],
@@ -308,6 +307,7 @@ def main():
 
     metrics_by_ticker = {}
     monthly_price_updates = {}
+    missing_from_batch = []
 
     print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] Starting Phase 1: Downloading data for {len(all_symbols)} symbols (Batch Download Mode)...")
 
@@ -315,24 +315,49 @@ def main():
         all_data = yf.download(all_symbols, period="4mo", interval="1d", auto_adjust=False, progress=False, group_by='ticker', timeout=15)
         print(f"  -> Batch download completed.")
     except Exception as e:
-        critical_msg = f"CRITICAL ERROR: yf.download(batch) failed: {e}. บังคับหยุดระบบ"
-        print(f"\n{critical_msg}")
-        raise RuntimeError(critical_msg)
+        print(f"  [Warning] Batch download failed ({e}). Proceeding to fetch individually...")
+        all_data = None
+        missing_from_batch = all_symbols.copy()
 
     for sym in all_symbols:
         print(f"  -> Processing {sym}...", end="", flush=True)
-        try:
-            if len(all_symbols) == 1:
-                df = all_data.copy()
-            else:
-                df = all_data[sym].copy()
+        df = None
+        
+        if all_data is not None:
+            try:
+                if len(all_symbols) == 1:
+                    df = all_data.copy()
+                else:
+                    df = all_data[sym].copy()
                 
-            df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+                df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+                if df.empty:
+                    df = None
+            except KeyError:
+                df = None
+
+        if df is None:
+            print(" Failed in batch. Retrying individually...", end="", flush=True)
+            try:
+                time.sleep(2)
+                df = yf.download(sym, period="4mo", interval="1d", auto_adjust=False, progress=False, timeout=10)
+                df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+            except Exception as retry_err:
+                print(f" Retry Failed ({str(retry_err)[:50]})")
+                metrics_by_ticker[sym] = {"status": "ไม่มีข้อมูล", "reason": f"ข้อมูลว่างเปล่า (Database locked หรือไม่มีข้อมูลในระบบ)"}
+                continue
+
+        if df is None or df.empty:
+            print(" Failed (No data/Holiday)")
+            metrics_by_ticker[sym] = {"status": "ไม่มีข้อมูล", "reason": f"ไม่พบราคาปิด ณ {expected_asof} จาก Yahoo Finance"}
+            continue
+            
+        try:
             df.index = pd.to_datetime(df.index).strftime("%Y-%m-%d")
             df = df[df.index <= expected_asof]
 
             if df.empty or expected_asof not in df.index:
-                print(" Failed (No data/Holiday)")
+                print(" Failed (No data for expected date)")
                 metrics_by_ticker[sym] = {"status": "ไม่มีข้อมูล", "reason": f"ไม่พบราคาปิด ณ {expected_asof} จาก Yahoo Finance"}
                 continue
 
