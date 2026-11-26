@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ProTrade 6-in-1 Self-Evolving Quant System Runner
-v4.2.8: Fixed hanging on 17th request by disabling session pool exhaustion
+v4.2.9: Fixed yfinance single-download Ticker hanging issue
 """
 
 import os
@@ -23,7 +23,7 @@ ET = ZoneInfo("America/New_York")
 BKK = ZoneInfo("Asia/Bangkok")
 DATA_DIR = "data"
 PROMPT_VERSION = "v4.2"
-SYSTEM_VERSION = "v4.2.8-Strict-NoHang"
+SYSTEM_VERSION = "v4.2.9-Strict-NoHang-Batch"
 
 MAX_MACRO_CALLS = 1
 MAX_MICRO_CALLS = 4
@@ -230,7 +230,7 @@ def chunk_list(items, n_chunks):
     return [items[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n_chunks)]
 
 def main():
-    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] ProTrade Script Started (v4.2.8)")
+    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] ProTrade Script Started (v4.2.9)")
     force_run = os.getenv("FORCE_RUN", "false").lower() == "true"
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     primary_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
@@ -308,98 +308,105 @@ def main():
     metrics_by_ticker = {}
     monthly_price_updates = {}
 
-    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] Starting Phase 1: Downloading data for {len(all_symbols)} symbols (Strict Mode)...")
+    print(f"[{datetime.now(BKK).isoformat(timespec='seconds')}] Starting Phase 1: Downloading data for {len(all_symbols)} symbols (Batch Download Mode)...")
+
+    try:
+        # V4.2.9: โหลดหุ้นทั้งหมดรวดเดียวในคำสั่งเดียว เพื่อหลีกเลี่ยงบั๊ก Deadlock ของ yfinance
+        all_data = yf.download(all_symbols, period="4mo", interval="1d", auto_adjust=False, progress=False, group_by='ticker', timeout=15)
+        print(f"  -> Batch download completed.")
+    except Exception as e:
+        critical_msg = f"CRITICAL ERROR: yf.download(batch) failed: {e}. บังคับหยุดระบบ"
+        print(f"\n{critical_msg}")
+        raise RuntimeError(critical_msg)
 
     for sym in all_symbols:
-        print(f"  -> Fetching {sym}...", end="", flush=True)
-        
-        df = pd.DataFrame()
-        success = False
-        last_fetch_err = ""
-        max_retries = 3
-        
-        for attempt in range(max_retries):
-            try:
-                # v4.2.8: ไม่ใช้ requests.Session แล้ว ปล่อยให้มันเปิด-ปิด connection ใหม่เสมอ ป้องกัน connection pool เต็มตอนตัวที่ 17
-                df = yf.download(sym, period="4mo", interval="1d", auto_adjust=False, progress=False, timeout=10)
-                if not df.empty:
-                    success = True
-                    break
-                else:
-                    last_fetch_err = "Empty DataFrame returned (อาจไม่มีข้อมูลใน Yahoo Finance)"
-            except Exception as e:
-                last_fetch_err = str(e)
-            
-            if attempt < max_retries - 1:
-                print(f" retry({attempt+1})...", end="", flush=True)
-                time.sleep(3)
+        print(f"  -> Processing {sym}...", end="", flush=True)
+        try:
+            # ดึงข้อมูลเฉพาะหุ้นตัวนั้นออกมาจาก Batch
+            if len(all_symbols) == 1:
+                df = all_data.copy()
+            else:
+                df = all_data[sym].copy()
                 
-        if not success:
-            critical_msg = f"CRITICAL ERROR: ไม่สามารถดึงข้อมูลหุ้น {sym} ได้หลังจากพยายาม {max_retries} ครั้ง (Error: {last_fetch_err[:100]}). บังคับหยุดระบบเพื่อป้องกันการวิเคราะห์หุ้นไม่ครบ 17 ตัว"
-            print(f"\n{critical_msg}")
-            raise RuntimeError(critical_msg)
-            
-        print(f" Done ({len(df)} rows)")
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
-        df.index = pd.to_datetime(df.index).strftime("%Y-%m-%d")
-        df = df[df.index <= expected_asof]
+            df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+            df.index = pd.to_datetime(df.index).strftime("%Y-%m-%d")
+            df = df[df.index <= expected_asof]
 
-        for d_idx, row in df.tail(45).iterrows():
-            ym = d_idx[:7]
-            monthly_price_updates.setdefault(ym, {}).setdefault(d_idx, {})[sym] = [
-                round(float(row["Open"]), 4),
-                round(float(row["Close"]), 4)
-            ]
+            if df.empty or expected_asof not in df.index:
+                print(" Failed (No data/Holiday)")
+                metrics_by_ticker[sym] = {"status": "ไม่มีข้อมูล", "reason": f"ไม่พบราคาปิด ณ {expected_asof} จาก Yahoo Finance"}
+                continue
 
-        close_now = float(df["Close"].iloc[-1])
-        prev_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else close_now
-        pct_chg = ((close_now / prev_close) - 1.0) * 100.0 if prev_close else 0.0
+            for d_idx, row in df.tail(45).iterrows():
+                ym = d_idx[:7]
+                monthly_price_updates.setdefault(ym, {}).setdefault(d_idx, {})[sym] = [
+                    round(float(row["Open"]), 4),
+                    round(float(row["Close"]), 4)
+                ]
 
-        sma20 = float(df["Close"].rolling(20).mean().iloc[-1]) if len(df) >= 20 else None
-        sma50 = float(df["Close"].rolling(50).mean().iloc[-1]) if len(df) >= 50 else None
-        rsi14 = compute_wilder_rsi(df["Close"], 14) if len(df) >= 15 else None
-        atr14 = compute_wilder_atr(df, 14) if len(df) >= 15 else None
+            close_now = float(df["Close"].iloc[-1])
+            prev_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else close_now
+            pct_chg = ((close_now / prev_close) - 1.0) * 100.0 if prev_close else 0.0
 
-        vol_now = float(df["Volume"].iloc[-1])
-        vol_avg20 = float(df["Volume"].rolling(20).mean().iloc[-1]) if len(df) >= 20 else vol_now
-        vol_ratio = round(vol_now / vol_avg20, 2) if vol_avg20 > 0 else 1.0
+            if abs(pct_chg) > 25.0:
+                print(f" Failed (Abnormal move {pct_chg:.1f}%)")
+                metrics_by_ticker[sym] = {"status": "ไม่มีข้อมูล", "reason": f"ราคาเปลี่ยนแปลงผิดปกติ {pct_chg:.1f}% เกิน 25% รอตรวจสอบ"}
+                continue
 
-        recent_sr = df.tail(sr_days)
-        support = round(float(recent_sr["Low"].min()), 2)
-        resistance = round(float(recent_sr["High"].max()), 2)
-        if support >= resistance:
-            resistance = round(support + (atr14 or 1.0), 2)
+            sma20 = float(df["Close"].rolling(20).mean().iloc[-1]) if len(df) >= 20 else None
+            sma50 = float(df["Close"].rolling(50).mean().iloc[-1]) if len(df) >= 50 else None
+            rsi14 = compute_wilder_rsi(df["Close"], 14) if len(df) >= 15 else None
+            atr14 = compute_wilder_atr(df, 14) if len(df) >= 15 else None
 
-        move_atr = round(abs(close_now - prev_close) / atr14, 2) if atr14 and atr14 > 0 else 0.0
-        prev_entry = prev_analysis.get("tickers", {}).get(sym, {})
-        last_full = prev_entry.get("last_full_date")
-        days_since_full = count_trading_days_between(last_full, expected_asof, holidays) if last_full else 999
+            vol_now = float(df["Volume"].iloc[-1])
+            vol_avg20 = float(df["Volume"].rolling(20).mean().iloc[-1]) if len(df) >= 20 else vol_now
+            vol_ratio = round(vol_now / vol_avg20, 2) if vol_avg20 > 0 else 1.0
 
-        mode = "full" if (move_atr >= trig_atr or days_since_full >= full_refresh_days or not last_full) else "short"
+            recent_sr = df.tail(sr_days)
+            support = round(float(recent_sr["Low"].min()), 2)
+            resistance = round(float(recent_sr["High"].max()), 2)
+            if support >= resistance:
+                resistance = round(support + (atr14 or 1.0), 2)
 
-        metrics_by_ticker[sym] = {
-            "status": "ok",
-            "close": round(close_now, 2),
-            "prev_close": round(prev_close, 2),
-            "pct_change": round(pct_chg, 2),
-            "sma20": round(sma20, 2) if sma20 else None,
-            "sma50": round(sma50, 2) if sma50 else None,
-            "rsi14": round(rsi14, 2) if rsi14 else None,
-            "atr14": round(atr14, 2) if atr14 else None,
-            "move_atr": move_atr,
-            "vol_ratio_20d": vol_ratio,
-            "support": support,
-            "resistance": resistance,
-            "bull_invalidation": round(support - inv_mult * (atr14 or 0), 2),
-            "bear_invalidation": round(resistance + inv_mult * (atr14 or 0), 2),
-            "analysis_mode": mode,
-            "last_full_date": expected_asof if mode == "full" else last_full,
-            "prev_entry": prev_entry if mode == "short" else None,
-            "source": f"Yahoo Finance ({expected_asof} close)"
-        }
+            move_atr = round(abs(close_now - prev_close) / atr14, 2) if atr14 and atr14 > 0 else 0.0
+            prev_entry = prev_analysis.get("tickers", {}).get(sym, {})
+            last_full = prev_entry.get("last_full_date")
+            days_since_full = count_trading_days_between(last_full, expected_asof, holidays) if last_full else 999
+
+            mode = "full" if (move_atr >= trig_atr or days_since_full >= full_refresh_days or not last_full) else "short"
+
+            metrics_by_ticker[sym] = {
+                "status": "ok",
+                "close": round(close_now, 2),
+                "prev_close": round(prev_close, 2),
+                "pct_change": round(pct_chg, 2),
+                "sma20": round(sma20, 2) if sma20 else None,
+                "sma50": round(sma50, 2) if sma50 else None,
+                "rsi14": round(rsi14, 2) if rsi14 else None,
+                "atr14": round(atr14, 2) if atr14 else None,
+                "move_atr": move_atr,
+                "vol_ratio_20d": vol_ratio,
+                "support": support,
+                "resistance": resistance,
+                "bull_invalidation": round(support - inv_mult * (atr14 or 0), 2),
+                "bear_invalidation": round(resistance + inv_mult * (atr14 or 0), 2),
+                "analysis_mode": mode,
+                "last_full_date": expected_asof if mode == "full" else last_full,
+                "prev_entry": prev_entry if mode == "short" else None,
+                "source": f"Yahoo Finance ({expected_asof} close)"
+            }
+            print(" OK")
+        except Exception as e:
+            print(f" Failed ({str(e)[:50]})")
+            metrics_by_ticker[sym] = {"status": "ไม่มีข้อมูล", "reason": f"ประมวลผลไม่สำเร็จ: {str(e)[:120]}"}
+
+    valid_count = sum(1 for s in tickers_default if metrics_by_ticker.get(s, {}).get("status") == "ok")
+    
+    # ห้ามข้ามถ้ามีหุ้นพัง! (Strict Requirement)
+    if valid_count < len(tickers_default):
+        critical_msg = f"CRITICAL ERROR: ประมวลผลหุ้นสำเร็จเพียง {valid_count}/{len(tickers_default)} ตัว ข้อมูลไม่ครบ บังคับหยุดระบบ"
+        print(f"\n{critical_msg}")
+        raise RuntimeError(critical_msg)
 
     prices_all = {}
     for ym, days_map in monthly_price_updates.items():
